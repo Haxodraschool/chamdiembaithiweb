@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Upload & Chấm điểm{% endblock %}
+{% block title %}Chấm điểm{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -131,8 +131,8 @@
 <div class="fade-in">
     <div class="section-header">
         <div>
-            <h2 class="section-title">Upload & Chấm điểm</h2>
-            <p class="section-subtitle">Chọn mã đề → Tải ảnh bài kiểm tra → Chấm điểm tự động</p>
+            <h2 class="section-title">Chấm điểm</h2>
+            <p class="section-subtitle">Chọn mẫu phiếu hoặc đề thi → Tải ảnh bài kiểm tra → Chấm điểm tự động</p>
         </div>
     </div>
 
@@ -166,104 +166,135 @@
     </div>
     {% endif %}
 
-    <!-- Secondary: Chọn phiếu trắng (không đề thi) -->
-    <div class="template-selector" x-data="templatePreview()">
-        <div class="template-selector-grid">
-            <div class="template-list-panel">
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Hoặc chọn mẫu phiếu trắng</span>
-                        <span class="body-sm text-on-surface-var">Chấm không đề — chỉ quét & nhận diện</span>
-                    </div>
+    <!-- Secondary: Chọn mẫu phiếu trắng (không đề thi) -->
+    <div x-data="templateCardPicker()">
+        <div style="margin-bottom: var(--space-4);">
+            <h3 style="font-weight: 700; margin: 0 0 4px;">Hoặc chọn mẫu phiếu có sẵn</h3>
+            <p class="body-sm text-on-surface-var">Chấm không đề — chỉ quét & nhận diện. Nhấn vào mẫu để xem chi tiết.</p>
+        </div>
 
-                    <div class="template-table-wrap">
-                        <table class="template-table">
-                            <thead>
-                                <tr>
-                                    <th>Mã đề</th>
-                                    <th>Phần 1</th>
-                                    <th>Phần 2</th>
-                                    <th>Phần 3</th>
-                                    <th>Tổng</th>
-                                    <th>Trang</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for t in templates %}
-                                <tr class="template-row" 
-                                    @mouseenter="showPreview('{{ t.code }}', {{ t.has_p2|yesno:'true,false' }})"
-                                    @mouseleave="hidePreview()">
-                                    <td class="template-code-cell">
-                                        <span class="template-code-badge">{{ t.label }}</span>
-                                    </td>
-                                    <td class="template-part-cell">{{ t.parts.0 }}</td>
-                                    <td class="template-part-cell">{{ t.parts.1 }}</td>
-                                    <td class="template-part-cell">{{ t.parts.2 }}</td>
-                                    <td class="template-total-cell">
-                                        <strong>{{ t.total }}</strong>
-                                    </td>
-                                    <td class="template-pages-cell">
-                                        {% if t.pages == 2 %}
-                                        <span class="chip chip-processing">2 trang</span>
-                                        {% else %}
-                                        <span class="chip chip-completed">1 trang</span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        <a href="{% url 'grading:upload' %}?template={{ t.code }}" 
-                                           class="btn btn-primary btn-sm">
-                                            Chọn
-                                        </a>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Right: Preview Panel (Sticky) -->
-            <div class="template-preview-panel">
-                <div class="card template-preview-card" :class="{ 'preview-active': currentCode }">
-                    <div class="card-header">
-                        <span class="card-title">Xem trước mẫu đề</span>
-                    </div>
-                    
-                    <!-- Default state -->
-                    <div class="template-preview-empty" x-show="!currentCode">
-                        <svg width="40" height="40" viewBox="0 0 20 20" fill="none" style="color: var(--on-surface-variant); opacity: 0.4;">
+        <!-- 3-column card grid -->
+        <div class="tpl-card-grid">
+            {% for t in templates %}
+            <div class="tpl-card" @click="openPreview('{{ t.code }}', '{{ t.label|escapejs }}', '{{ t.desc|escapejs }}', {{ t.parts.0 }}, {{ t.parts.1 }}, {{ t.parts.2 }}, {{ t.total }}, {{ t.pages }}, {{ t.has_p2|yesno:'true,false' }})">
+                <div class="tpl-card__header">
+                    <div class="tpl-card__avatar">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                             <path d="M4 3h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/>
                             <path d="M7 7h6M7 10h6M7 13h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                         </svg>
-                        <p>Di chuột qua mã đề<br>để xem trước mẫu đề thi</p>
                     </div>
+                    <div class="tpl-card__title-group">
+                        <h3 class="tpl-card__title">{{ t.label }}</h3>
+                        <span class="tpl-card__subtitle">{{ t.desc|default:"Mẫu phiếu trắng" }}</span>
+                    </div>
+                </div>
+                <div class="tpl-card__stats">
+                    <span class="tpl-card__stat">P1: {{ t.parts.0 }}</span>
+                    <span class="tpl-card__stat">P2: {{ t.parts.1 }}</span>
+                    <span class="tpl-card__stat">P3: {{ t.parts.2 }}</span>
+                    <span class="tpl-card__stat tpl-card__stat--accent">Tổng: {{ t.total }}</span>
+                </div>
+                <div class="tpl-card__footer">
+                    {% if t.pages == 2 %}
+                    <span class="chip chip-processing">2 trang</span>
+                    {% else %}
+                    <span class="chip chip-completed">1 trang</span>
+                    {% endif %}
+                    <span class="tpl-card__action-hint">Nhấn để chọn</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
 
-                    <!-- Preview images -->
-                    <div class="template-preview-images" x-show="currentCode" x-cloak>
-                        <div class="template-preview-label" x-text="'Mã đề: ' + currentCode"></div>
-                        <img :src="previewSrc" 
-                             class="template-preview-img" 
-                             x-show="currentCode && !imgError"
+        <!-- Preview Modal (teleported to body to avoid scroll-trapped fixed positioning) -->
+        <template x-teleport="body">
+        <div class="tpl-modal-overlay" x-show="modalOpen" x-cloak
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-150"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"
+             @keydown.escape.window="closePreview()">
+            <div class="tpl-modal" @click.outside="closePreview()">
+                <!-- Modal Header -->
+                <div class="tpl-modal__header">
+                    <div>
+                        <h3 class="tpl-modal__title" x-text="currentLabel"></h3>
+                        <p class="tpl-modal__desc body-sm text-on-surface-var" x-text="currentDesc"></p>
+                    </div>
+                    <button type="button" class="tpl-modal__close" @click="closePreview()">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Modal Body: stats + preview image -->
+                <div class="tpl-modal__body">
+                    <div class="tpl-modal__stats">
+                        <div class="tpl-modal__stat-item">
+                            <span class="tpl-modal__stat-label">Phần 1</span>
+                            <span class="tpl-modal__stat-value" x-text="currentP1"></span>
+                        </div>
+                        <div class="tpl-modal__stat-item">
+                            <span class="tpl-modal__stat-label">Phần 2</span>
+                            <span class="tpl-modal__stat-value" x-text="currentP2"></span>
+                        </div>
+                        <div class="tpl-modal__stat-item">
+                            <span class="tpl-modal__stat-label">Phần 3</span>
+                            <span class="tpl-modal__stat-value" x-text="currentP3"></span>
+                        </div>
+                        <div class="tpl-modal__stat-item tpl-modal__stat-item--accent">
+                            <span class="tpl-modal__stat-label">Tổng</span>
+                            <span class="tpl-modal__stat-value" x-text="currentTotal"></span>
+                        </div>
+                    </div>
+                    <div class="tpl-modal__preview">
+                        <img :src="previewSrc" class="tpl-modal__img"
+                             x-show="!imgError"
                              :alt="'Preview ' + currentCode"
-                             @error="imgError = true"
-                             @load="imgError = false">
-                        <div x-show="imgError" style="padding: 40px 20px; text-align: center; color: var(--on-surface-variant); font-size: 0.8125rem;">
+                             @error="imgError = true" @load="imgError = false">
+                        <img :src="previewSrcP2" class="tpl-modal__img"
+                             x-show="hasPage2 && !imgError" :alt="'Preview trang 2'">
+                        <div x-show="imgError" class="tpl-modal__no-img">
                             <svg width="48" height="48" viewBox="0 0 20 20" fill="none" style="opacity: 0.3; margin-bottom: 8px;">
                                 <path d="M4 3h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/>
                                 <path d="M7 7h6M7 10h6M7 13h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
-                            <p>Chưa có ảnh mẫu cho mã đề này</p>
+                            <p>Chưa có ảnh mẫu cho mẫu này</p>
                         </div>
-                        <img :src="previewSrcP2" 
-                             class="template-preview-img" 
-                             x-show="hasPage2"
-                             :alt="'Preview trang 2'">
                     </div>
+                </div>
+
+                <!-- Modal Footer: 3 buttons -->
+                <div class="tpl-modal__footer">
+                    <a :href="'{% url 'grading:exam_create' %}?template=' + currentCode"
+                       class="btn btn-secondary tpl-modal__btn">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        Tạo đề thi thủ công
+                    </a>
+                    <a :href="'{% url 'grading:exam_import' %}?template=' + currentCode"
+                       class="btn btn-primary tpl-modal__btn">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 2h5l4 4v7a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M9 2v4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        Chấm với file Excel
+                    </a>
+                    <button type="button" class="btn btn-tertiary tpl-modal__btn" @click="closePreview()">
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                            <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        Đóng
+                    </button>
                 </div>
             </div>
         </div>
+        </template>
     </div>
 
     {% else %}
@@ -495,25 +526,43 @@
 
 {% block extra_js %}
 <script>
-/* Template preview on hover */
-function templatePreview() {
+/* Template card picker with modal */
+function templateCardPicker() {
     return {
+        modalOpen: false,
         currentCode: '',
+        currentLabel: '',
+        currentDesc: '',
+        currentP1: 0,
+        currentP2: 0,
+        currentP3: 0,
+        currentTotal: 0,
+        currentPages: 1,
         hasPage2: false,
         previewSrc: '',
         previewSrcP2: '',
         imgError: false,
-        
-        showPreview(code, hasP2) {
+
+        openPreview(code, label, desc, p1, p2, p3, total, pages, hasP2) {
             this.currentCode = code;
+            this.currentLabel = label;
+            this.currentDesc = desc;
+            this.currentP1 = p1;
+            this.currentP2 = p2;
+            this.currentP3 = p3;
+            this.currentTotal = total;
+            this.currentPages = pages;
             this.hasPage2 = hasP2;
             this.imgError = false;
             this.previewSrc = '{% static "img/templates/" %}' + code + '.jpg';
             this.previewSrcP2 = hasP2 ? '{% static "img/templates/" %}' + code + '_p2.jpg' : '';
+            this.modalOpen = true;
+            document.body.style.overflow = 'hidden';
         },
-        
-        hidePreview() {
-            // Keep showing the last hovered template
+
+        closePreview() {
+            this.modalOpen = false;
+            document.body.style.overflow = '';
         }
     }
 }

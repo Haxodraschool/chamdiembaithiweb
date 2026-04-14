@@ -6,7 +6,7 @@
 {% block content %}
 <div class="fade-in">
     <!-- Header -->
-    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+    <div class="section-header">
         <div>
             <h2 class="section-title">Chi tiết bài nộp #{{ sub.id }}</h2>
             <p class="section-subtitle">
@@ -15,7 +15,7 @@
                 {{ sub.processing_time|default:"—" }}s
             </p>
         </div>
-        <div style="display: flex; gap: var(--space-2);">
+        <div style="display: flex; gap: var(--space-2); flex-wrap: wrap;">
             {% if sub.exam %}
             <a href="{% url 'grading:results' sub.exam.id %}" class="btn btn-secondary btn-sm">&larr; Quay lại</a>
             <form method="post" action="{% url 'grading:submission_regrade' sub.id %}" style="margin: 0;">
@@ -45,7 +45,7 @@
     <!-- ============================================================ -->
     <!-- SCORE OVERVIEW                                               -->
     <!-- ============================================================ -->
-    <div style="display: grid; grid-template-columns: 1fr 2fr; gap: var(--space-4); margin-bottom: var(--space-6);">
+    <div class="detail-score-grid" style="display: grid; grid-template-columns: 1fr 2fr; gap: var(--space-4); margin-bottom: var(--space-6);">
 
         <!-- Big Score Card -->
         <div class="card" style="padding: var(--space-5); text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center;">
@@ -237,7 +237,7 @@
     <!-- IMAGES                                                       -->
     <!-- ============================================================ -->
     <h3 style="margin-bottom: var(--space-4);">Ảnh xử lý</h3>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: var(--space-4); margin-bottom: var(--space-6);">
+    <div class="detail-image-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-4); margin-bottom: var(--space-6);">
         {% if images.original %}
         <div class="card" style="padding: var(--space-3);">
             <div style="padding: var(--space-2) var(--space-3); font-weight: 600; border-bottom: 1px solid var(--border);">Ảnh gốc</div>
@@ -278,7 +278,7 @@
     <details style="margin-bottom: var(--space-6);">
         <summary style="cursor: pointer; font-weight: 600; padding: var(--space-2);">Debug images &amp; data</summary>
         <div style="margin-top: var(--space-3);">
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-4); margin-bottom: var(--space-4);">
+            <div class="detail-image-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--space-4); margin-bottom: var(--space-4);">
                 {% if images.detect %}
                 <div class="card" style="padding: var(--space-3);">
                     <div style="padding: var(--space-2); font-weight: 600; font-size: 0.8125rem;">Detect</div>

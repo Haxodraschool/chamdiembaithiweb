@@ -80,6 +80,7 @@
                 </div>
                 
                 {% if recent_submissions %}
+                <div class="table-responsive">
                 <table class="data-table">
                     <thead>
                         <tr>
@@ -110,6 +111,7 @@
                         {% endfor %}
                     </tbody>
                 </table>
+                </div>
                 {% else %}
                 <div style="text-align: center; padding: var(--space-8) 0; color: var(--on-surface-variant);">
                     <p class="body-sm">Chưa có bài chấm nào</p>

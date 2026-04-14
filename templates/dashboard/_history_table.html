@@ -1,6 +1,7 @@
 <!-- History table partial — swapped via HTMX -->
 {% if submissions %}
 <div class="card">
+    <div class="table-responsive">
     <table class="data-table" id="history-table">
         <thead>
             <tr>
@@ -56,6 +57,7 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
 </div>
 {% else %}
 <div class="empty-state">

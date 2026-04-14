@@ -28,7 +28,7 @@
             <form method="post" enctype="multipart/form-data">
                 {% csrf_token %}
                 
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-4);">
+                <div class="profile-grid-2col" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-4);">
                     <div class="form-group">
                         <label class="form-label">Họ</label>
                         {{ form.first_name }}
@@ -44,7 +44,7 @@
                     {{ form.school }}
                 </div>
 
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-4);">
+                <div class="profile-grid-2col" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-4);">
                     <div class="form-group">
                         <label class="form-label">Môn dạy</label>
                         {{ form.subject }}

@@ -2501,3 +2501,331 @@
         grid-template-columns: 1fr;
     }
 }
+
+
+/* =============================================================================
+   TEMPLATE CARD GRID — Chọn mẫu phiếu có sẵn
+   ============================================================================= */
+
+/* ── Card Grid (3 columns on desktop) ── */
+.tpl-card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-4);
+}
+
+/* ── Individual Card ── */
+.tpl-card {
+    background: var(--surface-container-lowest);
+    border-radius: var(--radius-xl);
+    padding: var(--space-5);
+    border: 1.5px solid var(--outline-variant);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    transition: border-color var(--duration-fast) var(--ease-out),
+                box-shadow var(--duration-base) var(--ease-out),
+                transform var(--duration-base) var(--ease-out);
+}
+
+.tpl-card:hover {
+    border-color: var(--primary);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.06);
+    transform: translateY(-2px);
+}
+
+.tpl-card__header {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+}
+
+.tpl-card__avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-lg);
+    background: var(--primary);
+    color: var(--on-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.tpl-card__title-group {
+    flex: 1;
+    min-width: 0;
+}
+
+.tpl-card__title {
+    font-family: var(--font-display);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: var(--on-surface);
+    margin: 0;
+    line-height: 1.3;
+}
+
+.tpl-card__subtitle {
+    font-size: 0.75rem;
+    color: var(--on-surface-variant);
+    display: block;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tpl-card__stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.tpl-card__stat {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: var(--radius-full);
+    background: var(--surface-container);
+    color: var(--on-surface-variant);
+}
+
+.tpl-card__stat--accent {
+    background: var(--primary-fixed);
+    color: var(--primary);
+    font-weight: 700;
+}
+
+.tpl-card__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: auto;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--surface-container-high);
+}
+
+.tpl-card__action-hint {
+    font-size: 0.6875rem;
+    color: var(--primary);
+    font-weight: 600;
+}
+
+
+/* ── Preview Modal ── */
+.tpl-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 99999;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.tpl-modal {
+    background: var(--surface);
+    border-radius: var(--radius-xl);
+    max-width: 640px;
+    width: calc(100% - var(--space-4) * 2);
+    max-height: 85vh;
+    max-height: 85dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    box-shadow: 0 24px 48px rgba(0,0,0,0.25);
+    margin: auto;
+}
+
+.tpl-modal__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-5) var(--space-5) var(--space-3);
+}
+
+.tpl-modal__title {
+    font-family: var(--font-display);
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--on-surface);
+    margin: 0;
+}
+
+.tpl-modal__desc {
+    margin: 2px 0 0;
+}
+
+.tpl-modal__close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--on-surface-variant);
+    padding: 6px;
+    border-radius: var(--radius-md);
+    transition: background var(--duration-fast);
+    flex-shrink: 0;
+}
+
+.tpl-modal__close:hover {
+    background: var(--surface-container-high);
+}
+
+.tpl-modal__body {
+    padding: 0 var(--space-5) var(--space-4);
+}
+
+.tpl-modal__stats {
+    display: flex;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.tpl-modal__stat-item {
+    flex: 1;
+    text-align: center;
+    padding: var(--space-3);
+    background: var(--surface-container);
+    border-radius: var(--radius-lg);
+}
+
+.tpl-modal__stat-item--accent {
+    background: var(--primary-fixed);
+}
+
+.tpl-modal__stat-label {
+    display: block;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--on-surface-variant);
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.tpl-modal__stat-value {
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--on-surface);
+}
+
+.tpl-modal__stat-item--accent .tpl-modal__stat-value {
+    color: var(--primary);
+}
+
+.tpl-modal__preview {
+    border-radius: var(--radius-lg);
+    background: var(--surface-container-lowest);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 200px;
+}
+
+.tpl-modal__img {
+    max-width: 100%;
+    max-height: 400px;
+    width: auto;
+    border-radius: var(--radius-md);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.tpl-modal__no-img {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--on-surface-variant);
+    font-size: 0.8125rem;
+}
+
+.tpl-modal__footer {
+    display: flex;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5) var(--space-5);
+    border-top: 1px solid var(--outline-variant);
+}
+
+.tpl-modal__btn {
+    flex: 1;
+    justify-content: center;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+
+/* ── Responsive ── */
+@media (max-width: 1024px) {
+    .tpl-card-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 640px) {
+    .tpl-card-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .tpl-card {
+        padding: var(--space-4);
+    }
+
+    .tpl-modal-overlay {
+        padding: var(--space-3);
+        align-items: center;
+    }
+
+    .tpl-modal {
+        width: calc(100% - var(--space-3) * 2);
+        max-width: 100%;
+        max-height: 90vh;
+        max-height: 90dvh;
+        margin: auto;
+        border-radius: var(--radius-lg);
+    }
+
+    .tpl-modal__header {
+        padding: var(--space-4) var(--space-4) var(--space-2);
+    }
+
+    .tpl-modal__body {
+        padding: 0 var(--space-4) var(--space-3);
+    }
+
+    .tpl-modal__footer {
+        flex-direction: column;
+        padding: var(--space-3) var(--space-4) var(--space-4);
+    }
+
+    .tpl-modal__stats {
+        flex-wrap: wrap;
+    }
+
+    .tpl-modal__stat-item {
+        flex: 1 1 calc(50% - var(--space-2));
+        min-width: 0;
+    }
+
+    .tpl-modal__img {
+        max-height: 250px;
+    }
+
+    .tpl-modal__title {
+        font-size: 1rem;
+    }
+}

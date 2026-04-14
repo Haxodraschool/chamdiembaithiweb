@@ -480,6 +480,32 @@ html {
     background-color: var(--surface-container-high);
 }
 
+/* Mobile Home Button — visible only on mobile */
+.mobile-home-btn {
+    display: none;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-md);
+    align-items: center;
+    justify-content: center;
+    color: var(--on-surface-variant);
+    text-decoration: none;
+    transition: background-color var(--duration-fast), color var(--duration-fast);
+    flex-shrink: 0;
+}
+
+.mobile-home-btn:hover,
+.mobile-home-btn:active {
+    background-color: var(--surface-container-high);
+    color: var(--primary);
+}
+
+@media (max-width: 768px) {
+    .mobile-home-btn {
+        display: flex;
+    }
+}
+
 
 /* =============================================================================
    15. LOADING BUTTON STATE
@@ -531,5 +557,135 @@ html {
 @media (max-width: 768px) {
     .data-table {
         min-width: 600px;
+    }
+}
+
+
+/* =============================================================================
+   18. COMPREHENSIVE MOBILE OVERRIDES
+   Handles inline styles that can't be overridden in layout.css
+   ============================================================================= */
+
+/* ---------- Tablet ≤ 768px ---------- */
+@media (max-width: 768px) {
+    /* Card overflow prevention */
+    .card {
+        overflow-x: auto;
+    }
+
+    /* Dashboard: recent submissions table scroll */
+    .card > .data-table {
+        min-width: 500px;
+    }
+
+    /* Dropdown menu: don't overflow right */
+    .dropdown-menu {
+        right: 0;
+        left: auto;
+    }
+
+    /* Submission detail: name image cap */
+    .card img[alt="Tên học sinh"] {
+        max-width: 260px !important;
+    }
+
+    /* Pre/code blocks: scroll horizontally */
+    pre {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        font-size: 0.625rem !important;
+    }
+
+    /* Upload template table scroll */
+    .template-table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Exam card actions: stack */
+    .exam-card__actions {
+        flex-direction: column;
+    }
+
+    /* Submission detail: inline flex header → wrap */
+    .section-header > div[style*="display: flex"] {
+        flex-wrap: wrap;
+    }
+
+    /* Results toolbar */
+    .card .toolbar,
+    [style*="display: flex"][style*="gap"][style*="flex-wrap"] {
+        gap: var(--space-2);
+    }
+
+    /* Template selector grid → stack */
+    .template-selector-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    /* Template preview: hide on mobile (hover not available) */
+    .template-preview-panel {
+        display: none;
+    }
+
+    /* Variant tabs: scroll horizontally */
+    .variant-tabs {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        flex-wrap: nowrap;
+    }
+
+    .variant-tabs-bar {
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+}
+
+/* ---------- Phone ≤ 480px ---------- */
+@media (max-width: 480px) {
+    /* Card padding reduction */
+    .card {
+        padding: var(--space-3);
+    }
+
+    .card-header {
+        padding: var(--space-3);
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    /* Exam configurator sidebar: full width */
+    .exam-sidebar {
+        padding: var(--space-3) !important;
+    }
+
+    .exam-sidebar .card {
+        padding: var(--space-3) !important;
+    }
+
+    /* Smaller button text */
+    .btn-sm {
+        font-size: 0.75rem;
+        padding: 6px 10px;
+    }
+
+    /* Upload zone: compact */
+    .upload-zone {
+        padding: var(--space-3) !important;
+        min-height: auto !important;
+    }
+
+    .upload-zone-title {
+        font-size: 0.875rem;
+    }
+
+    /* Import: P2 grid → 2 columns */
+    .import-answers__p2-list {
+        grid-template-columns: 1fr !important;
+    }
+
+    /* Variant code input row: stack */
+    [style*="display: flex"][style*="align-items: center"][style*="gap"][style*="Mã đề"] {
+        flex-wrap: wrap;
     }
 }

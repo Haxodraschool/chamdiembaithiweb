@@ -7,6 +7,13 @@
                 <path d="M4 6h12M4 10h12M4 14h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
         </button>
+        <!-- Mobile Home Button -->
+        <a href="{% url 'dashboard:index' %}" class="mobile-home-btn" aria-label="Về trang chủ">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M3 10l7-7 7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M5 8.5V16a1 1 0 001 1h3v-4h2v4h3a1 1 0 001-1V8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </a>
         <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
     </div>
     <div class="navbar-right">
