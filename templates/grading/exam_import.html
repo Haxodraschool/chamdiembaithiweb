@@ -3,6 +3,59 @@
 
 {% block title %}Tạo đề thi từ file đáp án{% endblock %}
 
+{% block extra_css %}
+<style>
+    .camera-capture-zone { margin-bottom: var(--space-3); text-align: center; }
+    .camera-or-divider { display:flex; align-items:center; gap:var(--space-3); margin:var(--space-4) 0; }
+    .camera-or-divider span { font-size:0.75rem; font-weight:700; color:var(--on-surface-variant); text-transform:uppercase; letter-spacing:0.05em; }
+    .camera-or-divider::before,
+    .camera-or-divider::after { content:''; flex:1; height:1px; background:var(--outline-variant); }
+
+    .btn-camera-import {
+        display:inline-flex; align-items:center; gap:var(--space-2);
+        padding:var(--space-3) var(--space-6); border-radius:var(--radius-xl);
+        background:var(--tertiary-container, #e8def8); color:var(--on-tertiary-container, #4a4458);
+        border:2px solid transparent; font-weight:700; font-size:0.9375rem;
+        cursor:pointer; transition:all 0.2s;
+    }
+    .btn-camera-import:active { transform:scale(0.97); }
+
+    .camera-modal-overlay {
+        position:fixed; inset:0; z-index:9999;
+        background:rgba(0,0,0,0.7); backdrop-filter:blur(4px);
+        display:flex; align-items:center; justify-content:center; padding:var(--space-4);
+    }
+    .camera-modal {
+        background:var(--surface); border-radius:var(--radius-xl);
+        max-width:640px; width:100%; overflow:hidden;
+        box-shadow:0 25px 50px rgba(0,0,0,0.25);
+    }
+    .camera-modal__header {
+        display:flex; align-items:center; justify-content:space-between;
+        padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--outline-variant);
+    }
+    .camera-modal__header h3 { margin:0; font-weight:700; font-size:1rem; display:flex; align-items:center; gap:6px; }
+    .camera-modal__close {
+        background:none; border:none; cursor:pointer; padding:4px;
+        color:var(--on-surface-variant); border-radius:var(--radius-md); transition:background 0.15s;
+    }
+    .camera-modal__close:hover { background:var(--surface-container-high); }
+    .camera-modal__body { position:relative; background:#000; }
+    .camera-modal__body video,
+    .camera-modal__body img { width:100%; max-height:70vh; object-fit:contain; }
+    .camera-viewfinder__guide { position:absolute; inset:8%; pointer-events:none; }
+    .camera-guide-corner { position:absolute; width:28px; height:28px; border:3px solid rgba(255,255,255,0.7); }
+    .camera-guide-corner.tl { top:0; left:0; border-right:none; border-bottom:none; border-radius:4px 0 0 0; }
+    .camera-guide-corner.tr { top:0; right:0; border-left:none; border-bottom:none; border-radius:0 4px 0 0; }
+    .camera-guide-corner.bl { bottom:0; left:0; border-right:none; border-top:none; border-radius:0 0 0 4px; }
+    .camera-guide-corner.br { bottom:0; right:0; border-left:none; border-top:none; border-radius:0 0 4px 0; }
+    .camera-modal__footer {
+        display:flex; gap:var(--space-3); justify-content:center;
+        padding:var(--space-3) var(--space-4); border-top:1px solid var(--outline-variant);
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="fade-in" x-data="examImport()" x-cloak>
 
@@ -124,83 +177,62 @@
             </div>
 
             <!-- OR Divider -->
-            <div style="display:flex; align-items:center; gap:var(--space-3); margin:var(--space-4) 0;">
-                <div style="flex:1; height:1px; background:var(--outline-variant);"></div>
-                <span style="font-size:0.75rem; font-weight:700; color:var(--on-surface-variant); text-transform:uppercase; letter-spacing:0.05em;">hoặc</span>
-                <div style="flex:1; height:1px; background:var(--outline-variant);"></div>
-            </div>
+            <div class="camera-or-divider"><span>hoặc</span></div>
 
-            <!-- Camera Capture Button -->
-            <div style="text-align:center;">
-                <button type="button" class="btn btn-lg"
-                        style="gap:var(--space-2); padding:var(--space-3) var(--space-6); border-radius:var(--radius-xl); background:var(--tertiary-container, #e8def8); color:var(--on-tertiary-container, #4a4458); border:2px solid transparent; font-weight:700; font-size:0.9375rem; transition:all 0.2s;"
-                        @click="openCamera()">
+            <!-- Camera Capture -->
+            <div class="camera-capture-zone">
+                <button type="button" class="btn-camera-import" @click="openCamera()">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
                         <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         <circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="2"/>
                     </svg>
                     Chụp phiếu đáp án
                 </button>
-                <div style="margin-top:var(--space-2); font-size:0.75rem; color:var(--on-surface-variant);">
+                <div class="body-sm" style="margin-top:var(--space-2); color:var(--on-surface-variant);">
                     Mở camera để chụp trực tiếp phiếu đáp án đã tô
                 </div>
-                <!-- Hidden input for mobile native camera -->
-                <input type="file" x-ref="cameraInput"
-                       @change="handleCameraCapture($event)"
-                       accept="image/*" capture="environment"
-                       style="display:none;">
+                <input type="file" x-ref="cameraInput" @change="handleCameraCapture($event)"
+                       accept="image/*" capture="environment" class="sr-only">
             </div>
 
-            <!-- Camera Modal (WebRTC for desktop) -->
-            <div x-show="cameraOpen" x-cloak
-                 style="position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.75); display:flex; align-items:center; justify-content:center; padding:var(--space-4);"
+            <!-- Camera Modal -->
+            <div class="camera-modal-overlay" x-show="cameraOpen" x-cloak
                  x-transition:enter="transition ease-out duration-200"
-                 x-transition:enter-start="opacity-0"
-                 x-transition:enter-end="opacity-100"
+                 x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
                  x-transition:leave="transition ease-in duration-150"
-                 x-transition:leave-start="opacity-100"
-                 x-transition:leave-end="opacity-0"
+                 x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
                  @keydown.escape.window="closeCamera()">
-                <div style="background:var(--surface); border-radius:var(--radius-xl); max-width:640px; width:100%; overflow:hidden; box-shadow:0 25px 50px rgba(0,0,0,0.25);"
-                     @click.outside="closeCamera()">
-                    <!-- Header -->
-                    <div style="display:flex; align-items:center; justify-content:space-between; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--outline-variant);">
-                        <h3 style="margin:0; font-weight:700; font-size:1rem; display:flex; align-items:center; gap:6px;">
+                <div class="camera-modal" @click.outside="closeCamera()">
+                    <div class="camera-modal__header">
+                        <h3>
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                                 <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                                 <circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="2"/>
                             </svg>
                             Chụp phiếu đáp án
                         </h3>
-                        <button type="button" @click="closeCamera()"
-                                style="background:none; border:none; cursor:pointer; padding:4px; color:var(--on-surface-variant);">
+                        <button type="button" class="camera-modal__close" @click="closeCamera()">
                             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                                 <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                             </svg>
                         </button>
                     </div>
-                    <!-- Video / Preview -->
-                    <div style="position:relative; background:#000;">
-                        <video x-ref="cameraVideo" x-show="!capturedImage" autoplay playsinline muted
-                               style="width:100%; max-height:70vh; object-fit:contain;"></video>
-                        <img x-show="capturedImage" :src="capturedImage" x-cloak
-                             style="width:100%; max-height:70vh; object-fit:contain;">
+                    <div class="camera-modal__body">
+                        <video x-ref="cameraVideo" x-show="!capturedImage" autoplay playsinline muted></video>
+                        <img x-show="capturedImage" :src="capturedImage" x-cloak>
                         <canvas x-ref="cameraCanvas" style="display:none;"></canvas>
-                        <!-- Guide corners -->
-                        <div x-show="!capturedImage" style="position:absolute; inset:8%; pointer-events:none;">
-                            <div style="position:absolute; top:0; left:0; width:30px; height:30px; border-top:3px solid rgba(255,255,255,0.7); border-left:3px solid rgba(255,255,255,0.7); border-radius:4px 0 0 0;"></div>
-                            <div style="position:absolute; top:0; right:0; width:30px; height:30px; border-top:3px solid rgba(255,255,255,0.7); border-right:3px solid rgba(255,255,255,0.7); border-radius:0 4px 0 0;"></div>
-                            <div style="position:absolute; bottom:0; left:0; width:30px; height:30px; border-bottom:3px solid rgba(255,255,255,0.7); border-left:3px solid rgba(255,255,255,0.7); border-radius:0 0 0 4px;"></div>
-                            <div style="position:absolute; bottom:0; right:0; width:30px; height:30px; border-bottom:3px solid rgba(255,255,255,0.7); border-right:3px solid rgba(255,255,255,0.7); border-radius:0 0 4px 0;"></div>
+                        <div class="camera-viewfinder__guide" x-show="!capturedImage">
+                            <div class="camera-guide-corner tl"></div>
+                            <div class="camera-guide-corner tr"></div>
+                            <div class="camera-guide-corner bl"></div>
+                            <div class="camera-guide-corner br"></div>
                         </div>
                     </div>
-                    <!-- Footer buttons -->
-                    <div style="display:flex; gap:var(--space-3); justify-content:center; padding:var(--space-3) var(--space-4); border-top:1px solid var(--outline-variant);">
+                    <div class="camera-modal__footer">
                         <template x-if="!capturedImage">
                             <div style="display:flex; gap:var(--space-3);">
                                 <button type="button" class="btn btn-secondary" @click="closeCamera()">Hủy</button>
-                                <button type="button" class="btn btn-primary" @click="capturePhoto()"
-                                        style="gap:6px; padding:var(--space-2) var(--space-5);">
+                                <button type="button" class="btn btn-primary" @click="capturePhoto()" style="gap:6px;">
                                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                                         <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
                                         <circle cx="12" cy="12" r="7" fill="currentColor"/>
@@ -211,13 +243,7 @@
                         </template>
                         <template x-if="capturedImage">
                             <div style="display:flex; gap:var(--space-3);">
-                                <button type="button" class="btn btn-secondary" @click="retakePhoto()">
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                        <path d="M2 2v5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                        <path d="M3 11a6 6 0 1 0 1.5-6.5L2 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                    Chụp lại
-                                </button>
+                                <button type="button" class="btn btn-secondary" @click="retakePhoto()">Chụp lại</button>
                                 <button type="button" class="btn btn-primary" @click="acceptPhoto()">
                                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                                         <path d="M3 8l3.5 3.5L13 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>

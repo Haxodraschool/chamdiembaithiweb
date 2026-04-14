@@ -995,6 +995,7 @@ def submission_detail_view(request, submission_id):
     suffixes = {
         'original': sub.image.name,
         'result': '_result.jpg',
+        'overlay': '_overlay.jpg',
         'name': '_name.jpg',
         'calibration': '_calibration.jpg',
         'gray': '_gray.jpg',

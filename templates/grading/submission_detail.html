@@ -249,6 +249,17 @@
         </div>
         {% endif %}
 
+        {% if images.overlay %}
+        <div class="card" style="padding: var(--space-3); border: 2px solid var(--primary);">
+            <div style="padding: var(--space-2) var(--space-3); font-weight: 600; border-bottom: 1px solid var(--border); color: var(--primary);">Ảnh gốc + Kết quả</div>
+            <div style="padding: var(--space-3);">
+                <a href="{{ images.overlay }}" target="_blank">
+                    <img src="{{ images.overlay }}" style="width: 100%; border-radius: 8px;" alt="Overlay">
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
         {% if images.result %}
         <div class="card" style="padding: var(--space-3);">
             <div style="padding: var(--space-2) var(--space-3); font-weight: 600; border-bottom: 1px solid var(--border); color: var(--primary);">Ảnh kết quả</div>

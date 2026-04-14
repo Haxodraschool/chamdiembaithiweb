@@ -2190,6 +2190,8 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     _print_answers(p1_ans, p2_ans, p3_ans)
 
     # --- Bước 6: Chấm điểm (nếu có đáp án đúng) ---
+    # Vẽ lên mask trống → blend vào warped (addWeighted overlay)
+    result_mask = np.zeros_like(warped)   # mask trống để vẽ kết quả
     result_image = warped.copy()
     total_score = None
 
@@ -2198,19 +2200,19 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         if "part1" in correct_answers:
             s, r = grade_part1(p1_ans, correct_answers["part1"])
             scores["part1"] = s
-            draw_results_part1(result_image, r)
+            draw_results_part1(result_mask, r)
             print(f"\n  Phần I  : {s}/40")
 
         if "part2" in correct_answers:
             s, r = grade_part2(p2_ans, correct_answers["part2"])
             scores["part2"] = s
-            draw_results_part2(result_image, r)
+            draw_results_part2(result_mask, r)
             print(f"  Phần II : {s}/8")
 
         if "part3" in correct_answers:
             s, r = grade_part3(p3_ans, correct_answers["part3"])
             scores["part3"] = s
-            draw_results_part3(result_image, r, p3_det)
+            draw_results_part3(result_mask, r, p3_det)
             print(f"  Phần III: {s}/6")
 
         total_score = sum(scores.values())
@@ -2220,18 +2222,40 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         print(f"  ─────────────────")
         print(f"  TỔNG ĐIỂM: {total_score}/{max_score}")
 
-        # Ghi điểm to ở góc trên ảnh kết quả
-        cv2.putText(result_image, f"DIEM: {total_score}/{max_score}",
+        # Ghi điểm to lên mask
+        cv2.putText(result_mask, f"DIEM: {total_score}/{max_score}",
                     (30, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 220), 3)
 
-    # Ghi SBD + Mã đề lên ảnh
-    cv2.putText(result_image, f"SBD: {sbd}  MD: {made}",
+    # Ghi SBD + Mã đề lên mask
+    cv2.putText(result_mask, f"SBD: {sbd}  MD: {made}",
                 (30, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180, 0, 0), 2)
 
-    # --- Lưu ảnh kết quả ---
+    # Blend mask lên warped: nền bài + kết quả bán trong suốt
+    result_image = cv2.addWeighted(result_image, 1, result_mask, 0.7, 0)
+
+    # --- Lưu ảnh kết quả (warped) ---
     out_path = f"{base}_result.jpg"
     cv2.imwrite(out_path, result_image)
     print(f"\n[OK] Ảnh kết quả: {out_path}")
+
+    # --- Inverse Warp: nắn kết quả ngược về ảnh gốc ---
+    if not pre_warped and corners is not None:
+        try:
+            dst_pts = np.array([
+                [0, 0], [WARP_WIDTH - 1, 0],
+                [WARP_WIDTH - 1, WARP_HEIGHT - 1], [0, WARP_HEIGHT - 1]
+            ], dtype="float32")
+            inv_M = cv2.getPerspectiveTransform(dst_pts, corners)
+            h_orig, w_orig = image.shape[:2]
+            # Nắn mask kết quả ngược về perspective gốc
+            inv_mask = cv2.warpPerspective(result_mask, inv_M, (w_orig, h_orig))
+            # Overlay lên ảnh gốc
+            overlay_image = cv2.addWeighted(image, 1, inv_mask, 0.8, 0)
+            overlay_path = f"{base}_overlay.jpg"
+            cv2.imwrite(overlay_path, overlay_image)
+            print(f"[OK] Ảnh overlay (inverse warp): {overlay_path}")
+        except Exception as e:
+            print(f"[WARN] Inverse warp failed: {e}")
 
     # --- Crop vùng tên học sinh từ ảnh warped gốc (sạch) ---
     name_path = ""
