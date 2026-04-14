@@ -734,7 +734,10 @@ def auto_deskew_and_crop(image, debug=False):
         _draw_debug(debug_img, best_corners, None, best_method.upper(),
                     (0, 165, 255))
 
-    return _result(best_warped, best_corners, best_method, True, debug_img)
+    result = _result(best_warped, best_corners, best_method, True, debug_img)
+    # Lưu danh sách tất cả candidates để process_sheet có thể thử lại
+    result["_candidates"] = candidates
+    return result
 
 
 def _validate_marker_quad(ordered, img_w, img_h):
@@ -2079,6 +2082,9 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     # --- Bước 1-2: Detect corners + Warp ---
     if pre_warped:
         warped = cv2.resize(image, (WARP_WIDTH, WARP_HEIGHT))
+        method = "pre_warped"
+        corners = None
+        all_candidates = []
         print(f"[OK] Ảnh pre-warped ({WARP_WIDTH}x{WARP_HEIGHT})")
     else:
         try:
@@ -2086,6 +2092,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             warped = detect_result["warped"]
             method = detect_result["method"]
             corners = detect_result["corners"]
+            all_candidates = detect_result.get("_candidates", [])
             print(f"[OK] Phát hiện bằng: {method}")
             print(f"[OK] 4 góc: {corners.astype(int).tolist()}")
             print(f"[OK] Warped → {WARP_WIDTH}x{WARP_HEIGHT}")
@@ -2124,6 +2131,48 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
     p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
     p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
+
+    # --- Retry với method khác nếu SBD hoặc Mã đề có '?' ---
+    sbd_has_q = '?' in str(sbd)
+    made_has_q = '?' in str(made)
+    if (sbd_has_q or made_has_q) and len(all_candidates) > 1:
+        print(f"\n  [RETRY] SBD='{sbd}' MĐ='{made}' có '?' → thử method khác...")
+        for ci, cand in enumerate(all_candidates[1:], start=1):
+            c_score, c_sharp, c_warped, c_corners, c_method = cand
+            print(f"  [RETRY #{ci}] Thử {c_method} (score={c_score:.1f})")
+            c_gray, c_thresh, c_cleaned = preprocess(c_warped)
+            c_sbd, c_made, c_sbd_det = extract_sbd_made(c_gray)
+            c_sbd_q = '?' in str(c_sbd)
+            c_made_q = '?' in str(c_made)
+            print(f"  [RETRY #{ci}] SBD='{c_sbd}' MĐ='{c_made}'")
+
+            # Đếm số '?' — ít hơn = tốt hơn
+            old_q = str(sbd).count('?') + str(made).count('?')
+            new_q = str(c_sbd).count('?') + str(c_made).count('?')
+
+            if new_q < old_q:
+                print(f"  [RETRY #{ci}] Tốt hơn! ({new_q} < {old_q} dấu ?) → chuyển sang {c_method}")
+                warped = c_warped
+                method = c_method
+                corners = c_corners
+                gray, thresh, cleaned = c_gray, c_thresh, c_cleaned
+                sbd, made, sbd_det = c_sbd, c_made, c_sbd_det
+                sbd_has_q = c_sbd_q
+                made_has_q = c_made_q
+                # Đọc lại đáp án với warped mới
+                offsets = detect_section_offsets(gray)
+                p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+                p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
+                p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
+                if not c_sbd_q and not c_made_q:
+                    break  # Hoàn hảo, không cần thử thêm
+            else:
+                print(f"  [RETRY #{ci}] Không tốt hơn ({new_q} >= {old_q}) → bỏ qua")
+
+    # Cảnh báo nếu sau tất cả vẫn còn '?'
+    if '?' in str(sbd) or '?' in str(made):
+        print(f"\n  [CẢNH BÁO] SBD='{sbd}' MĐ='{made}' — "
+              f"học sinh chưa tô hoặc ảnh không rõ. Đã thử {len(all_candidates)} method.")
 
     # --- In kết quả ---
     print(f"\n  SỐ BÁO DANH: {sbd}")
