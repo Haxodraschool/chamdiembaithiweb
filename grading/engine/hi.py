@@ -2083,6 +2083,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     if pre_warped:
         warped = cv2.resize(image, (WARP_WIDTH, WARP_HEIGHT))
         method = "pre_warped"
+        _orig_method = method
         corners = None
         all_candidates = []
         print(f"[OK] Ảnh pre-warped ({WARP_WIDTH}x{WARP_HEIGHT})")
@@ -2091,6 +2092,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             detect_result = detect_paper_and_warp(image, debug=debug)
             warped = detect_result["warped"]
             method = detect_result["method"]
+            _orig_method = method
             corners = detect_result["corners"]
             all_candidates = detect_result.get("_candidates", [])
             print(f"[OK] Phát hiện bằng: {method}")
@@ -2173,6 +2175,14 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     if '?' in str(sbd) or '?' in str(made):
         print(f"\n  [CẢNH BÁO] SBD='{sbd}' MĐ='{made}' — "
               f"học sinh chưa tô hoặc ảnh không rõ. Đã thử {len(all_candidates)} method.")
+
+    # --- Ghi lại debug images nếu retry đã chuyển method ---
+    if debug and not pre_warped and method != _orig_method:
+        cv2.imwrite(f"{base}_calibration.jpg", draw_bubble_grid(warped))
+        cv2.imwrite(f"{base}_gray.jpg", gray)
+        cv2.imwrite(f"{base}_thresh.jpg", thresh)
+        cv2.imwrite(f"{base}_cleaned.jpg", cleaned)
+        print(f"[DEBUG] Ghi lại debug images cho method: {method}")
 
     # --- In kết quả ---
     print(f"\n  SỐ BÁO DANH: {sbd}")
