@@ -184,19 +184,19 @@
             <div class="body-sm" style="font-weight: 600; margin-bottom: var(--space-2); color: var(--on-surface-variant);">
                 Phần I — Trắc nghiệm
             </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 4px;">
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
                 {% for q in p1_comparison %}
-                <div style="display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 6px; font-size: 0.8125rem;
+                <div style="display: flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 6px; font-size: 0.8125rem; white-space: nowrap;
                     {% if q.ok %}background: var(--success-container, #d4edda); border: 1px solid rgba(27,122,61,0.2);
                     {% elif q.student == '—' or q.student == 'X' %}background: var(--surface-container); border: 1px solid var(--outline-variant); opacity: 0.6;
                     {% else %}background: var(--error-container, #f8d7da); border: 1px solid rgba(186,26,26,0.2);{% endif %}">
-                    <span style="font-weight: 700; min-width: 24px;">{{ q.num }}.</span>
-                    <span style="font-weight: 600;
+                    <span style="font-weight: 700; color: var(--on-surface-variant); font-size: 0.75rem;">{{ q.num }}.</span>
+                    <span style="font-weight: 700;
                         {% if q.ok %}color: var(--on-success-container, #155724);{% elif q.student == '—' or q.student == 'X' %}color: var(--on-surface-variant);{% else %}color: var(--on-error-container, #721c24);{% endif %}">
                         {{ q.student }}
                     </span>
                     {% if not q.ok and q.student != '—' %}
-                    <span style="color: var(--on-surface-variant); font-size: 0.6875rem;">&rarr;{{ q.correct }}</span>
+                    <span style="color: var(--on-surface-variant); font-size: 0.6875rem; opacity: 0.7;">&rarr;{{ q.correct }}</span>
                     {% endif %}
                 </div>
                 {% endfor %}
@@ -214,16 +214,16 @@
             <div class="body-sm" style="font-weight: 600; margin-bottom: var(--space-2); color: var(--on-surface-variant);">
                 Phần III — Điền số
             </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 4px;">
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
                 {% for q in p3_comparison %}
-                <div style="display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 6px; font-size: 0.8125rem;
+                <div style="display: flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 6px; font-size: 0.8125rem; white-space: nowrap;
                     {% if q.ok %}background: var(--success-container, #d4edda); border: 1px solid rgba(27,122,61,0.2);
                     {% elif q.student == '—' %}background: var(--surface-container); border: 1px solid var(--outline-variant); opacity: 0.6;
                     {% else %}background: var(--error-container, #f8d7da); border: 1px solid rgba(186,26,26,0.2);{% endif %}">
-                    <span style="font-weight: 700; min-width: 24px;">{{ q.num }}.</span>
-                    <span style="font-weight: 600;">{{ q.student }}</span>
+                    <span style="font-weight: 700; color: var(--on-surface-variant); font-size: 0.75rem;">{{ q.num }}.</span>
+                    <span style="font-weight: 700;">{{ q.student }}</span>
                     {% if not q.ok and q.student != '—' %}
-                    <span style="color: var(--on-surface-variant); font-size: 0.6875rem;">&rarr;{{ q.correct }}</span>
+                    <span style="color: var(--on-surface-variant); font-size: 0.6875rem; opacity: 0.7;">&rarr;{{ q.correct }}</span>
                     {% endif %}
                 </div>
                 {% endfor %}
