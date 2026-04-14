@@ -4,9 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Đăng nhập hệ thống chấm điểm trắc nghiệm tự động GradeFlow">
+    <meta name="description" content="Đăng ký tài khoản GradeFlow">
     <meta name="theme-color" content="#005BBF">
-    <title>Đăng nhập — GradeFlow</title>
+    <title>Đăng ký — GradeFlow</title>
 
     <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'><rect width='28' height='28' rx='8' fill='%23005BBF'/><path d='M8 14.5L12 18.5L20 10.5' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
@@ -16,10 +16,10 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Manrope:wght@200..800&display=swap" rel="stylesheet">
 
     <link rel="stylesheet" href="{% static 'css/design-system.css' %}?v=2">
-    <link rel="stylesheet" href="{% static 'css/components.css' %}?v=5">
+    <link rel="stylesheet" href="{% static 'css/components.css' %}?v=7">
     <link rel="stylesheet" href="{% static 'css/layout.css' %}?v=3">
     <link rel="stylesheet" href="{% static 'css/animations.css' %}?v=2">
-    <link rel="stylesheet" href="{% static 'css/polish.css' %}?v=3">
+    <link rel="stylesheet" href="{% static 'css/polish.css' %}?v=4">
 
     <script>
         (function(){
@@ -32,7 +32,7 @@
 </head>
 <body>
     <div class="auth-layout">
-        <!-- Left: Login Form -->
+        <!-- Left: Register Form -->
         <div class="auth-left">
             <div class="auth-card fade-in">
                 <!-- Logo -->
@@ -42,8 +42,8 @@
                 </div>
 
                 <!-- Title -->
-                <h1 class="auth-title">Đăng nhập</h1>
-                <p class="auth-subtitle">Chào mừng trở lại! Vui lòng đăng nhập để tiếp tục.</p>
+                <h1 class="auth-title">Tạo tài khoản</h1>
+                <p class="auth-subtitle">Đăng ký để bắt đầu sử dụng hệ thống chấm điểm.</p>
 
                 <!-- Error messages -->
                 {% if messages %}
@@ -56,41 +56,65 @@
                 </div>
                 {% endif %}
 
-                <!-- Login Form -->
-                <form method="post" action="{% url 'accounts:login' %}?next={{ request.GET.next|default:'/dashboard/' }}" class="auth-form" id="login-form">
+                <!-- Register Form -->
+                <form method="post" action="{% url 'accounts:register' %}" class="auth-form" id="register-form">
                     {% csrf_token %}
-                    
+
                     <div class="form-group">
-                        <label for="login-email" class="form-label">Email</label>
-                        <input type="email" name="email" id="login-email"
-                               class="form-input" 
+                        <label for="reg-name" class="form-label">Họ và tên</label>
+                        <input type="text" name="full_name" id="reg-name"
+                               class="form-input"
+                               placeholder="Nguyễn Văn An"
+                               value="{{ form.full_name.value|default:'' }}"
+                               autofocus required>
+                        {% if form.full_name.errors %}
+                        <span class="form-error">{{ form.full_name.errors.0 }}</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="reg-email" class="form-label">Email</label>
+                        <input type="email" name="email" id="reg-email"
+                               class="form-input"
                                placeholder="email@truonghoc.edu.vn"
                                value="{{ form.email.value|default:'' }}"
-                               autofocus required>
+                               required>
                         {% if form.email.errors %}
                         <span class="form-error">{{ form.email.errors.0 }}</span>
                         {% endif %}
                     </div>
 
                     <div class="form-group">
-                        <label for="login-password" class="form-label">Mật khẩu</label>
-                        <input type="password" name="password" id="login-password"
+                        <label for="reg-password" class="form-label">Mật khẩu</label>
+                        <input type="password" name="password" id="reg-password"
                                class="form-input"
                                placeholder="••••••••"
+                               minlength="8"
                                required>
                         {% if form.password.errors %}
                         <span class="form-error">{{ form.password.errors.0 }}</span>
                         {% endif %}
                     </div>
 
-                    <button type="submit" class="btn btn-primary btn-lg btn-block hover-glow" id="login-submit">
-                        Đăng nhập
+                    <div class="form-group">
+                        <label for="reg-password-confirm" class="form-label">Xác nhận mật khẩu</label>
+                        <input type="password" name="password_confirm" id="reg-password-confirm"
+                               class="form-input"
+                               placeholder="••••••••"
+                               required>
+                        {% if form.password_confirm.errors %}
+                        <span class="form-error">{{ form.password_confirm.errors.0 }}</span>
+                        {% endif %}
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-lg btn-block hover-glow" id="register-submit">
+                        Đăng ký
                     </button>
                 </form>
 
                 <script>
-                    document.getElementById('login-form').addEventListener('submit', function() {
-                        var btn = document.getElementById('login-submit');
+                    document.getElementById('register-form').addEventListener('submit', function() {
+                        var btn = document.getElementById('register-submit');
                         btn.classList.add('is-loading');
                         btn.disabled = true;
                     });
@@ -113,13 +137,13 @@
                         <path fill="#FBBC05" d="M10.53 28.59A14.5 14.5 0 019.5 24c0-1.59.28-3.14.76-4.59l-7.98-6.19A23.99 23.99 0 000 24c0 3.77.9 7.34 2.56 10.78l7.97-6.19z"/>
                         <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
                     </svg>
-                    Đăng nhập bằng Google
+                    Đăng ký bằng Google
                 </a>
 
-                <!-- Footer: link to register -->
+                <!-- Footer: link to login -->
                 <p style="margin-top: var(--space-6); font-size: 0.8125rem; color: var(--on-surface-variant); text-align: center;">
-                    Chưa có tài khoản?
-                    <a href="{% url 'accounts:register' %}" style="color: var(--primary); font-weight: 600; text-decoration: none;">Đăng ký ngay</a>
+                    Đã có tài khoản?
+                    <a href="{% url 'accounts:login' %}" style="color: var(--primary); font-weight: 600; text-decoration: none;">Đăng nhập</a>
                 </p>
             </div>
         </div>

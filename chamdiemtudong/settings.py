@@ -154,7 +154,7 @@ AUTHENTICATION_BACKENDS = [
 ACCOUNT_LOGIN_METHODS = {'email'}
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']
 ACCOUNT_EMAIL_VERIFICATION = 'none'
-ACCOUNT_SIGNUP_CLOSED = True  # No public signup via email/password
+ACCOUNT_SIGNUP_CLOSED = False  # Public signup enabled
 
 LOGIN_URL = '/accounts/login/'
 LOGIN_REDIRECT_URL = '/dashboard/'
@@ -179,7 +179,7 @@ SOCIALACCOUNT_LOGIN_ON_GET = True         # Skip intermediate "Continue?" page
 SOCIALACCOUNT_QUERY_EMAIL = True
 
 # Custom adapters: block email signup, allow Google signup
-ACCOUNT_ADAPTER = 'accounts.adapters.NoSignupAccountAdapter'
+ACCOUNT_ADAPTER = 'accounts.adapters.CustomAccountAdapter'
 SOCIALACCOUNT_ADAPTER = 'accounts.adapters.GoogleSocialAdapter'
 
 # Password validation

@@ -5,7 +5,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.dispatch import receiver
 from allauth.account.signals import user_logged_in
-from .forms import LoginForm, ProfileForm
+from .forms import LoginForm, RegisterForm, ProfileForm
 from .models import TeacherProfile
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,55 @@ def login_view(request):
             logger.warning(f'[LOGIN] Form invalid: {form.errors}')
     
     return render(request, 'accounts/login.html', {'form': form})
+
+
+def register_view(request):
+    """Registration page — email/password, or via Google."""
+    if request.user.is_authenticated:
+        return redirect('dashboard:index')
+
+    form = RegisterForm()
+
+    if request.method == 'POST':
+        form = RegisterForm(request.POST)
+        if form.is_valid():
+            full_name = form.cleaned_data['full_name']
+            email = form.cleaned_data['email']
+            password = form.cleaned_data['password']
+
+            # Split full_name into first/last
+            parts = full_name.strip().split()
+            first_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
+            last_name = parts[-1] if len(parts) > 1 else ''
+
+            from django.contrib.auth.models import User
+            user = User.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+            )
+
+            # Create TeacherProfile
+            TeacherProfile.objects.get_or_create(user=user)
+
+            # Create allauth EmailAddress
+            try:
+                from allauth.account.models import EmailAddress
+                EmailAddress.objects.get_or_create(
+                    user=user, email=email,
+                    defaults={'verified': True, 'primary': True}
+                )
+            except Exception:
+                pass
+
+            # Auto-login
+            login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+            messages.success(request, f'Chào mừng {user.get_full_name()}! Tài khoản đã được tạo.')
+            return redirect('dashboard:index')
+
+    return render(request, 'accounts/register.html', {'form': form})
 
 
 def logout_view(request):

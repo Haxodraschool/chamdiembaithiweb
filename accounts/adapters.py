@@ -1,19 +1,19 @@
 """
 Custom allauth adapters.
-- Block email/password signup (admin-only accounts).
+- Allow email/password signup via custom register view.
 - Allow social login (Google) to auto-create users.
 """
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 
 
-class NoSignupAccountAdapter(DefaultAccountAdapter):
-    """Block public email/password registration."""
+class CustomAccountAdapter(DefaultAccountAdapter):
+    """Allow signup (used by both custom register view and allauth internally)."""
     def is_open_for_signup(self, request):
-        return False
+        return True
 
 
 class GoogleSocialAdapter(DefaultSocialAccountAdapter):
-    """Allow social (Google) signup even though email signup is closed."""
+    """Allow Google OAuth signup — auto-create user on first Google login."""
     def is_open_for_signup(self, request, sociallogin):
         return True
