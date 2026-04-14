@@ -25,5 +25,5 @@ class GoogleSocialAdapter(DefaultSocialAccountAdapter):
         logger.error(f'[SOCIAL] auth error: provider={provider_id}, error={error}, exception={exception}')
 
     def pre_social_login(self, request, sociallogin):
-        logger.info(f'[SOCIAL] pre_social_login: user={sociallogin.user}, account={sociallogin.account}')
+        logger.info('[SOCIAL] pre_social_login called')
         super().pre_social_login(request, sociallogin)
