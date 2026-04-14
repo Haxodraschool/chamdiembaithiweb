@@ -32,6 +32,8 @@ if RAILWAY_PUBLIC_DOMAIN:
 # Railway environment: cho phép mọi host (healthcheck dùng IP nội bộ)
 if os.environ.get('RAILWAY_ENVIRONMENT'):
     ALLOWED_HOSTS = ['*']
+    # Railway terminates SSL at edge — tell Django requests are HTTPS
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
