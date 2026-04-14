@@ -168,6 +168,10 @@ SOCIALACCOUNT_PROVIDERS = {
         'AUTH_PARAMS': {'access_type': 'online'},
     }
 }
+
+# On Railway, allauth must use https for callback URLs
+if os.environ.get('RAILWAY_ENVIRONMENT'):
+    ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https'
 SOCIALACCOUNT_AUTO_SIGNUP = True         # Auto-create user on first Google login
 SOCIALACCOUNT_EMAIL_AUTHENTICATION = True # Match existing user by email
 SOCIALACCOUNT_EMAIL_REQUIRED = True
@@ -239,6 +243,19 @@ CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
 # =============================================================================
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Logging — show allauth errors in Railway logs
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler'},
+    },
+    'loggers': {
+        'allauth': {'handlers': ['console'], 'level': 'DEBUG'},
+        'django.request': {'handlers': ['console'], 'level': 'DEBUG'},
+    },
+}
 
 # File upload limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
