@@ -1,0 +1,39 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lỗi đăng nhập — GradeFlow</title>
+    <link rel="stylesheet" href="{% static 'css/design-system.css' %}?v=2">
+    <link rel="stylesheet" href="{% static 'css/components.css' %}?v=7">
+    <link rel="stylesheet" href="{% static 'css/layout.css' %}?v=3">
+    <link rel="stylesheet" href="{% static 'css/polish.css' %}?v=4">
+</head>
+<body>
+    <div class="auth-layout">
+        <div class="auth-left">
+            <div class="auth-card fade-in" style="max-width: 480px;">
+                <h1 class="auth-title">Lỗi đăng nhập Google</h1>
+                <p class="auth-subtitle">Đã xảy ra lỗi khi đăng nhập bằng tài khoản Google.</p>
+
+                {% if auth_error %}
+                <div class="chip chip-poor" style="padding: var(--space-3) var(--space-4); font-size: 0.8125rem; margin-bottom: var(--space-4); word-break: break-all;">
+                    <strong>Chi tiết lỗi:</strong><br>
+                    {{ auth_error }}
+                </div>
+                {% endif %}
+
+                <div style="display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-5);">
+                    <a href="{% url 'accounts:login' %}" class="btn btn-primary btn-lg btn-block" style="text-decoration: none; text-align: center;">
+                        Quay lại đăng nhập
+                    </a>
+                    <a href="/accounts/google/login/?process=login" class="btn btn-secondary btn-lg btn-block" style="text-decoration: none; text-align: center;">
+                        Thử lại với Google
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
