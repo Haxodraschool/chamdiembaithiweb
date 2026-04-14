@@ -174,6 +174,10 @@ SOCIALACCOUNT_EMAIL_REQUIRED = True
 SOCIALACCOUNT_LOGIN_ON_GET = True         # Skip intermediate "Continue?" page
 SOCIALACCOUNT_QUERY_EMAIL = True
 
+# Custom adapters: block email signup, allow Google signup
+ACCOUNT_ADAPTER = 'accounts.adapters.NoSignupAccountAdapter'
+SOCIALACCOUNT_ADAPTER = 'accounts.adapters.GoogleSocialAdapter'
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
