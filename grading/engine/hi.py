@@ -60,8 +60,8 @@ CIRCULARITY_THRESHOLD = 0.6
 
 # Bán kính vùng bảo vệ bubble khi xóa text (LỚP 1)
 # Phải >= BUBBLE_RADIUS để không xóa vào bubble
-# +3px margin an toàn cho sai lệch warp nhẹ
-BUBBLE_PROTECT_RADIUS = BUBBLE_RADIUS + 3
+# +8px margin cho sai lệch warp ảnh phone (trước: +3px quá ít)
+BUBBLE_PROTECT_RADIUS = BUBBLE_RADIUS + 8
 
 # ╔════════════════════════════════════════════════════════════════════════╗
 # ║              TỌA ĐỘ PHẦN I - 40 câu ABCD (4 cột x 10 hàng)        ║
