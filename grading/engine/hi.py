@@ -635,9 +635,11 @@ def _score_warp_quality(warped, method_name, corners):
             detail['stab'] = f"{stab:.1f}"
 
     # ── 5) Bonus nhẹ cho corner_markers ──
+    # [FIX] Đã loại bỏ +8 điểm tùy ý vì nó có thể làm corner_markers thắng 
+    #       ngay cả khi paper_contour nắn chuẩn hơn.
     if method_name.startswith("corner_markers"):
-        score += 8.0
-        detail['bonus'] = '+8'
+        score += 0.0
+        detail['bonus'] = '+0'
 
     # ── 6) Marker refinement ──
     refined = _refine_targeted(warped)
@@ -695,62 +697,8 @@ def auto_deskew_and_crop(image, debug=False):
                                    "corner_markers"))
             print(f"  [A] corner_markers → {score_a:.1f}")
 
-    # ─── Method C: HYBRID paper + corner markers (DIRECT) ───
-    # Dùng mép giấy làm "hoa tiêu" → tìm marker làm "mỏ neo" trong ROI nhỏ
-    # → warp 1 lần duy nhất từ ảnh gốc (chính xác hơn paper + refine 2 bước)
+    # ─── Method B: Paper contour ───
     paper = _find_paper_contour(image, debug_img)
-    if paper is not None:
-        ordered_paper = order_points(paper)
-        img_h, img_w = image.shape[:2]
-        gray_orig = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) \
-            if len(image.shape) == 3 else image.copy()
-
-        # Tâm giấy → xác định hướng "vào trong" cho mỗi góc
-        paper_center_x = np.mean(ordered_paper[:, 0])
-        paper_center_y = np.mean(ordered_paper[:, 1])
-
-        paper_w = np.linalg.norm(ordered_paper[1] - ordered_paper[0])
-        paper_h = np.linalg.norm(ordered_paper[3] - ordered_paper[0])
-
-        # ROI: 5.5% sâu vào trong, 1.5% lấn ra ngoài
-        inward_dist = max(30, int(min(paper_w, paper_h) * 0.055))
-        outward_dist = max(10, int(min(paper_w, paper_h) * 0.015))
-
-        marker_centers = []
-        for corner_pt in ordered_paper:
-            cx_approx, cy_approx = int(corner_pt[0]), int(corner_pt[1])
-
-            # Hướng vào tâm giấy
-            dx_sign = int(np.sign(paper_center_x - cx_approx))
-            dy_sign = int(np.sign(paper_center_y - cy_approx))
-
-            y1 = max(0, cy_approx - (outward_dist if dy_sign > 0 else inward_dist))
-            y2 = min(img_h, cy_approx + (inward_dist if dy_sign > 0 else outward_dist))
-            x1 = max(0, cx_approx - (outward_dist if dx_sign > 0 else inward_dist))
-            x2 = min(img_w, cx_approx + (inward_dist if dx_sign > 0 else outward_dist))
-
-            roi = gray_orig[y1:y2, x1:x2]
-
-            # Proximity scoring: ưu tiên marker gần mép, phạt chữ in bên trong
-            marker = _find_marker_near_corner(
-                roi, cx_approx - x1, cy_approx - y1)
-            if marker is not None:
-                marker_centers.append([x1 + marker[0], y1 + marker[1]])
-
-        if len(marker_centers) == 4:
-            markers_orig = order_points(
-                np.array(marker_centers, dtype="float32"))
-            if _validate_marker_quad(markers_orig, img_w, img_h):
-                warped_c = _warp_to_rect(image, markers_orig)
-                score_c, sharp_c, _ = _score_warp_quality(
-                    warped_c, "paper+markers", markers_orig)
-                # Bonus +5: cả mép giấy lẫn marker đều OK → tin cậy cao
-                score_c += 5.0
-                candidates.append((score_c, sharp_c, warped_c, markers_orig,
-                                   "paper+markers"))
-                print(f"  [C] paper+markers → {score_c:.1f}")
-
-    # ─── Method B: Paper contour (fallback) ───
     if paper is not None:
         ordered_p = order_points(paper)
         warped_b = _warp_to_rect(image, ordered_p)
@@ -764,6 +712,85 @@ def auto_deskew_and_crop(image, debug=False):
         candidates.append((score_b, sharp_b, warped_b, ordered_p, method_b))
         print(f"  [B] {method_b} → {score_b:.1f}")
 
+    # ─── Method C: HYBRID paper + corner markers (DIRECT) ───
+    # Cách 1 (tối ưu): Dùng paper corners làm HOA TIÊU, tìm marker 
+    # TRỰC TIẾP trên ảnh gốc — KHÔNG cần warp trung gian.
+    #
+    # Quy trình:
+    #   1) Paper contour cho 4 góc thô (mép giấy) trên ảnh gốc
+    #   2) Crop vùng nhỏ BÊN TRONG giấy quanh mỗi góc thô
+    #   3) Tìm ô vuông đen (marker) thực sự trong mỗi ROI
+    #   4) Lấy TÂM marker → đó là 4 điểm warp chính xác pixel-level
+    #   5) 1 WARP DUY NHẤT từ ảnh gốc đến tâm markers
+    if paper is not None:
+        ordered_paper = order_points(paper)
+        img_h, img_w = image.shape[:2]
+        gray_orig = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) \
+            if len(image.shape) == 3 else image.copy()
+        
+        # Tâm giấy — dùng để xác định hướng "vào trong"
+        paper_center_x = np.mean(ordered_paper[:, 0])
+        paper_center_y = np.mean(ordered_paper[:, 1])
+        
+        # ROI rất nhỏ: marker nằm SÁT mép giấy (~2-5% kích thước giấy)
+        paper_w = np.linalg.norm(ordered_paper[1] - ordered_paper[0])
+        paper_h = np.linalg.norm(ordered_paper[3] - ordered_paper[0])
+        # Vào trong: ~5% kích thước giấy (marker cách mép ~3%)
+        inward_dist = max(30, int(min(paper_w, paper_h) * 0.055))
+        # Ra ngoài: chỉ ~1.5% (marker có thể hơi lấn ra ngoài mép paper contour)
+        outward_dist = max(10, int(min(paper_w, paper_h) * 0.015))
+        
+        marker_centers = []
+        for i, corner_pt in enumerate(ordered_paper):
+            cx_approx = int(corner_pt[0])
+            cy_approx = int(corner_pt[1])
+            
+            # Hướng "vào trong" giấy
+            dx_sign = int(np.sign(paper_center_x - cx_approx))
+            dy_sign = int(np.sign(paper_center_y - cy_approx))
+            
+            # ROI: vào trong nhiều, ra ngoài ít
+            x1 = max(0, cx_approx - (outward_dist if dx_sign > 0 else inward_dist))
+            x2 = min(img_w, cx_approx + (inward_dist if dx_sign > 0 else outward_dist))
+            y1 = max(0, cy_approx - (outward_dist if dy_sign > 0 else inward_dist))
+            y2 = min(img_h, cy_approx + (inward_dist if dy_sign > 0 else outward_dist))
+            
+            roi = gray_orig[y1:y2, x1:x2]
+            if roi.size == 0:
+                break
+            
+            # Tìm ô vuông đen + ưu tiên vị trí GẦN góc paper nhất
+            marker = _find_marker_near_corner(roi, cx_approx - x1, cy_approx - y1)
+            if marker is None:
+                break
+            
+            marker_x = x1 + marker[0]
+            marker_y = y1 + marker[1]
+            marker_centers.append([float(marker_x), float(marker_y)])
+        
+        if len(marker_centers) == 4:
+            markers_orig = order_points(
+                np.array(marker_centers, dtype="float32"))
+            
+            # Validate: markers phải tạo hình chữ nhật hợp lệ
+            if _validate_marker_quad(markers_orig, img_w, img_h):
+                # 1 WARP DUY NHẤT từ ảnh gốc dùng tâm markers
+                warped_c = _warp_to_rect(image, markers_orig)
+                
+                # Score (KHÔNG refine thêm — đã chính xác pixel-level)
+                score_c, sharp_c, _ = _score_warp_quality(
+                    warped_c, "paper+markers", markers_orig)
+                # Bonus +5 vì cross-validate
+                score_c += 5.0
+                candidates.append((score_c, sharp_c, warped_c, markers_orig,
+                                   "paper+markers"))
+                print(f"  [C] paper+markers → {score_c:.1f} "
+                      f"(direct marker search, +5 cross-validate)")
+            else:
+                print(f"  [C] paper+markers: quad invalid → skip")
+        else:
+            print(f"  [C] paper+markers: only {len(marker_centers)}/4 markers → skip")
+
     # ─── Chọn kết quả tốt nhất ───
     if not candidates:
         raise ValueError("Không tìm được viền giấy lẫn 4 góc đen.")
@@ -772,7 +799,8 @@ def auto_deskew_and_crop(image, debug=False):
     candidates.sort(key=lambda x: x[0], reverse=True)
 
     # Tie-breaker: nếu chênh < 5 điểm → ưu tiên sharpness cao hơn
-    # NGOẠI TRỪ hybrid (paper+markers) → giữ nguyên vì đã có cả 2 lớp xác thực
+    # NGOẠI TRỪ: nếu top là hybrid (paper+markers) → giữ nguyên vì double-warp
+    #            giảm sharpness nhưng tọa độ chính xác hơn
     if len(candidates) > 1:
         top = candidates[0]
         runner = candidates[1]
@@ -1265,6 +1293,80 @@ def _refine_targeted(warped_raw):
     return ordered
 
 
+def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
+    """
+    Tìm ô vuông đen (corner marker) trong ROI, ƯU TIÊN vị trí GẦN góc paper.
+    
+    Giống _find_marker_in_roi nhưng thêm proximity scoring:
+    - Marker xa góc paper > 40px bị phạt nặng
+    - Ưu tiên ô vuông nhỏ, đặc (15-25px) gần mép giấy
+    
+    corner_x_in_roi, corner_y_in_roi: tọa độ góc paper trong hệ ROI
+    Returns (cx, cy) hoặc None.
+    """
+    rh, rw = roi_gray.shape[:2]
+    if rh < 15 or rw < 15:
+        return None
+
+    best_center = None
+    best_score = 0
+
+    for tval in [50, 70, 90, 110, 130]:
+        _, binary = cv2.threshold(roi_gray, tval, 255, cv2.THRESH_BINARY_INV)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # Marker trên ảnh gốc: 60-2000px² (nhỏ hơn trên warped)
+            if area < 40 or area > 3000:
+                continue
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            asp = bw / float(bh) if bh > 0 else 0
+            if 0.45 < asp < 2.2:
+                fill = area / (bw * bh) if bw * bh > 0 else 0
+                if fill < 0.5:
+                    continue
+                squareness = 1.0 - abs(asp - 1.0) * 0.5
+                
+                # Tâm contour
+                mcx = x + bw // 2
+                mcy = y + bh // 2
+                
+                # Khoảng cách đến góc paper (trong hệ ROI)
+                dist = np.sqrt((mcx - corner_x_in_roi)**2 + 
+                               (mcy - corner_y_in_roi)**2)
+                
+                # Proximity bonus: gần góc → score cao hơn
+                # Marker thực tế cách mép giấy 10-40px
+                proximity = max(0.1, 1.0 - dist / 120.0)
+                
+                score = area * squareness * fill * proximity
+                if score > best_score:
+                    best_score = score
+                    best_center = (mcx, mcy)
+
+    if best_center is not None:
+        return best_center
+
+    # Fallback: Template matching (giữ nguyên)
+    for tsize in [16, 20, 24]:
+        pad = 5
+        tmpl = np.ones((tsize + pad * 2, tsize + pad * 2), dtype=np.uint8) * 200
+        tmpl[pad:pad + tsize, pad:pad + tsize] = 30
+
+        if rh < tmpl.shape[0] or rw < tmpl.shape[1]:
+            continue
+
+        result = cv2.matchTemplate(roi_gray, tmpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+        if max_val > 0.35:
+            return (max_loc[0] + tmpl.shape[1] // 2,
+                    max_loc[1] + tmpl.shape[0] // 2)
+
+    return None
+
+
 def _find_marker_in_roi(roi_gray):
     """
     Tìm ô vuông đen (corner marker) trong ROI nhỏ.
@@ -1324,58 +1426,6 @@ def _find_marker_in_roi(roi_gray):
                     max_loc[1] + tmpl.shape[0] // 2)
 
     return None
-
-
-def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
-    """
-    Tìm marker đen trong ROI, ưu tiên gần mép giấy (Proximity Scoring).
-
-    Khác với _find_marker_in_roi (chỉ chấm area × squareness × fill),
-    hàm này PHẠT NẶNG contour nằm sâu bên trong tờ giấy (có thể là
-    chữ in, số SBD...) và ưu tiên contour sát viền — đúng đặc điểm
-    của corner marker.
-
-    Returns (cx, cy) hoặc None.
-    """
-    rh, rw = roi_gray.shape[:2]
-    if rh < 15 or rw < 15:
-        return None
-
-    best_center = None
-    best_score = 0
-
-    for tval in [50, 70, 90, 110, 130]:
-        _, binary = cv2.threshold(roi_gray, tval, 255, cv2.THRESH_BINARY_INV)
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
-                                       cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < 40 or area > 3000:
-                continue
-
-            x, y, bw, bh = cv2.boundingRect(cnt)
-            asp = bw / float(bh) if bh > 0 else 0
-            if not (0.45 < asp < 2.2):
-                continue
-
-            fill = area / (bw * bh) if bw * bh > 0 else 0
-            if fill < 0.5:
-                continue
-
-            squareness = 1.0 - abs(asp - 1.0) * 0.5
-            mcx, mcy = x + bw // 2, y + bh // 2
-
-            # Proximity scoring: phạt nếu marker nằm xa mép giấy
-            dist = np.sqrt((mcx - corner_x_in_roi)**2 +
-                           (mcy - corner_y_in_roi)**2)
-            proximity = max(0.1, 1.0 - dist / 120.0)
-
-            score = area * squareness * fill * proximity
-            if score > best_score:
-                best_score = score
-                best_center = (mcx, mcy)
-
-    return best_center
 
 
 def _validate_corner_positions(ordered_pts, img_w, img_h):
@@ -2278,42 +2328,12 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
     p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
 
-    # --- Retry với method khác nếu SBD hoặc Mã đề có '?' ---
-    sbd_has_q = '?' in str(sbd)
-    made_has_q = '?' in str(made)
-    if (sbd_has_q or made_has_q) and len(all_candidates) > 1:
-        print(f"\n  [RETRY] SBD='{sbd}' MĐ='{made}' có '?' → thử method khác...")
-        for ci, cand in enumerate(all_candidates[1:], start=1):
-            c_score, c_sharp, c_warped, c_corners, c_method = cand
-            print(f"  [RETRY #{ci}] Thử {c_method} (score={c_score:.1f})")
-            c_gray, c_thresh, c_cleaned = preprocess(c_warped)
-            c_sbd, c_made, c_sbd_det = extract_sbd_made(c_gray)
-            c_sbd_q = '?' in str(c_sbd)
-            c_made_q = '?' in str(c_made)
-            print(f"  [RETRY #{ci}] SBD='{c_sbd}' MĐ='{c_made}'")
+    # --- Retry với method khác nếu SBD hoặc Mã đề có '?' (VÔ HIỆU HÓA vì SBD/Made không bắt buộc) ---
+    # sbd_has_q = '?' in str(sbd)
+    # made_has_q = '?' in str(made)
+    # if (sbd_has_q or made_has_q) and len(all_candidates) > 1:
+    #     print(f"\n  [RETRY] SBD='{sbd}' MĐ='{made}' có '?' → thử method khác (đã tắt).")
 
-            # Đếm số '?' — ít hơn = tốt hơn
-            old_q = str(sbd).count('?') + str(made).count('?')
-            new_q = str(c_sbd).count('?') + str(c_made).count('?')
-
-            if new_q < old_q:
-                print(f"  [RETRY #{ci}] Tốt hơn! ({new_q} < {old_q} dấu ?) → chuyển sang {c_method}")
-                warped = c_warped
-                method = c_method
-                corners = c_corners
-                gray, thresh, cleaned = c_gray, c_thresh, c_cleaned
-                sbd, made, sbd_det = c_sbd, c_made, c_sbd_det
-                sbd_has_q = c_sbd_q
-                made_has_q = c_made_q
-                # Đọc lại đáp án với warped mới
-                offsets = detect_section_offsets(gray)
-                p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
-                p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
-                p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
-                if not c_sbd_q and not c_made_q:
-                    break  # Hoàn hảo, không cần thử thêm
-            else:
-                print(f"  [RETRY #{ci}] Không tốt hơn ({new_q} >= {old_q}) → bỏ qua")
 
     # Cảnh báo nếu sau tất cả vẫn còn '?'
     if '?' in str(sbd) or '?' in str(made):
