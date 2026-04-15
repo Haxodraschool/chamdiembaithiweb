@@ -1363,27 +1363,16 @@ def preprocess(warped, enhance_camera=False):
 
     Binary threshold CHỈ tạo ra cho debug visualization.
 
-    enhance_camera: True → áp dụng cân bằng sáng nâng cao (ảnh camera)
+    Pipeline:
+      1) erase_printed_text() — LỚP 1 punch-hole xóa chữ in
+      2) GaussianBlur — giảm noise
 
     Trả về: gray (blurred, dùng detect), thresh (debug), cleaned (debug)
     """
-    gray_raw = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+    # --- LỚP 1: erase_printed_text (punch-hole) ---
+    warped_clean = erase_printed_text(warped)
 
-    # Cân bằng sáng cho ảnh camera: equalize_adapthist (scikit-image)
-    # Chỉ kích hoạt khi ảnh có contrast thấp (bóng đổ, ánh sáng không đều)
-    if enhance_camera:
-        std_val = float(np.std(gray_raw))
-        mean_val = float(np.mean(gray_raw))
-        # Ảnh camera thường: std < 55 (contrast thấp) hoặc mean < 160 (tối)
-        if std_val < 55 or mean_val < 160:
-            gray_norm = gray_raw.astype(np.float64) / 255.0
-            gray_enhanced = exposure.equalize_adapthist(
-                gray_norm, kernel_size=64, clip_limit=0.02
-            )
-            gray_raw = (gray_enhanced * 255).astype(np.uint8)
-            print(f"[ENHANCE] equalize_adapthist (std={std_val:.0f}, mean={mean_val:.0f})")
-        else:
-            print(f"[ENHANCE] Ảnh sạch, bỏ qua (std={std_val:.0f}, mean={mean_val:.0f})")
+    gray_raw = cv2.cvtColor(warped_clean, cv2.COLOR_BGR2GRAY)
 
     gray = cv2.GaussianBlur(gray_raw, (5, 5), 0)
 
@@ -1547,7 +1536,7 @@ def _detect_filled_choices(ratios):
       → FILL_THRESHOLD cao (0.38) loại bỏ baseline inflate (~0.34).
 
     Pha 2 (Adaptive): CHỈ chạy khi Pha 1 không tìm thấy gì.
-      → Tìm duy nhất 1 bubble nổi trội nhất (top adjusted).
+      → Trừ noise_floor (2nd smallest) → tìm bubble nổi trội nhất.
       → Điều kiện: top_adj > 0.05 VÀ (top_adj - 2nd_adj) > 0.03
       → Không bao giờ return nhiều → không gây false X.
 
@@ -1557,7 +1546,7 @@ def _detect_filled_choices(ratios):
         return []
 
     vals = list(ratios.values())
-    if max(vals) < 0.18:
+    if max(vals) < 0.12:
         return []
 
     # --- Pha 1: Absolute ---
@@ -2155,7 +2144,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             return None
 
     # --- Bước 3: Tiền xử lý ---
-    # (Text erasure đã tắt — dùng calibrate.py để căn tọa độ tránh chữ in)
+    # Pipeline: erase_printed_text → auto-detect phone → illumination norm + CLAHE
     gray, thresh, cleaned = preprocess(warped)
     print("[OK] Grayscale detection (pencil-friendly)")
 
