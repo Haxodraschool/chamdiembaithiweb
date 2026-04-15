@@ -1724,7 +1724,8 @@ def extract_part3(cleaned_img, y_offset=0):
         q_det["comma"] = comma_ratios
 
         # 3) Đọc 4 cột số (mỗi cột: chọn digit 0-9 có ratio cao nhất)
-        #    Dùng _detect_filled_choices cho mỗi cột 10 bubble
+        #    Dùng logic MAX dominant (giống SBD/MĐ) thay vì _detect_filled_choices
+        #    vì 10 bubble/cột khiến adaptive phase quá nhạy → false positive
         digits = []
         digit_det = []
         for ci, cx in enumerate(cols_x):
@@ -1734,13 +1735,16 @@ def extract_part3(cleaned_img, y_offset=0):
                 _, r = is_bubble_filled(cleaned_img, cx, cy)
                 col_ratios[str(d)] = round(r, 3)
             digit_det.append({int(k): v for k, v in col_ratios.items()})
-            filled = _detect_filled_choices(col_ratios)
-            if len(filled) == 1:
-                digits.append(int(filled[0]))
-            elif len(filled) > 1:
-                digits.append(-1)  # Tô trùng → hủy cột
+            # Pick MAX ratio nếu nổi bật (gap > 0.05 so với 2nd)
+            sorted_items = sorted(col_ratios.items(), key=lambda x: x[1], reverse=True)
+            top_d, top_r = sorted_items[0]
+            second_r = sorted_items[1][1] if len(sorted_items) > 1 else 0
+            if top_r > FILL_THRESHOLD and (top_r - second_r) > 0.05:
+                digits.append(int(top_d))
+            elif top_r > 0.25 and (top_r - second_r) > 0.08:
+                digits.append(int(top_d))  # Bút chì nhạt nhưng nổi rõ
             else:
-                digits.append(-1)  # Không tô
+                digits.append(-1)  # Không tô hoặc không rõ
         q_det["digits"] = digit_det
         details[q] = q_det
 
