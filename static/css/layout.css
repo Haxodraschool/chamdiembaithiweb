@@ -461,8 +461,8 @@
     }
 }
 
-/* ---------- Tablet ≤ 768px ---------- */
-@media (max-width: 768px) {
+/* ---------- Tablet & Mobile ≤ 1024px ---------- */
+@media (max-width: 1024px) {
     /* Sidebar: off-screen drawer */
     .sidebar {
         transform: translateX(-100%);

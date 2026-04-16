@@ -2,7 +2,7 @@
 <header class="top-navbar">
     <div class="navbar-left">
         <!-- Mobile Menu Button -->
-        <button class="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="Mở menu">
+        <button class="mobile-menu-btn" @click="mobileMenuOpen = !mobileMenuOpen" aria-label="Mở menu">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <path d="M4 6h12M4 10h12M4 14h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>

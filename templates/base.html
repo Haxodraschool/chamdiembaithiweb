@@ -36,7 +36,7 @@
         })();
     </script>
 </head>
-<body x-data="{ sidebarOpen: true, toasts: [] }" class="app-body">
+<body x-data="{ sidebarOpen: true, mobileMenuOpen: false, toasts: [] }" class="app-body">
 
     <!-- Page Loader (HTMX progress bar) -->
     <div id="page-loader"></div>
@@ -46,7 +46,7 @@
     {% include "partials/_sidebar.html" %}
 
     <!-- Mobile Backdrop -->
-    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+    <div class="sidebar-backdrop" :class="{ 'active': mobileMenuOpen }" @click="mobileMenuOpen = false" x-show="mobileMenuOpen" x-transition.opacity></div>
     {% endif %}
 
     <!-- Main Content Area -->

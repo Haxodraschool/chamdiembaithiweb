@@ -1,6 +1,6 @@
-{% load static %}
++{% load static %}
 <!-- Sidebar Navigation -->
-<aside class="sidebar" :class="{ 'collapsed': !sidebarOpen }" x-cloak>
+<aside class="sidebar" :class="{ 'collapsed': !sidebarOpen, 'mobile-open': mobileMenuOpen }" x-cloak>
     <!-- Logo -->
     <div class="sidebar-header">
         <div class="sidebar-logo">
@@ -39,7 +39,14 @@
                     <path d="M14 6l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                     <path d="M14 16l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-                <span x-show="sidebarOpen" x-transition>Chấm điểm</span>
+                <span x-show="sidebarOpen" x-transition>Upload & Chấm</span>
+            </a>
+            <a href="{% url 'grading:live_camera' %}" class="nav-item {% if request.resolver_match.url_name == 'live_camera' %}active{% endif %}">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <rect x="3" y="5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"></rect>
+                    <circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"></circle>
+                </svg>
+                <span x-show="sidebarOpen" x-transition>Chấm Camera Live</span>
             </a>
             <a href="{% url 'grading:exams' %}" class="nav-item {% if request.resolver_match.url_name == 'exams' %}active{% endif %}">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none">

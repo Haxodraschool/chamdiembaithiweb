@@ -65,6 +65,15 @@
         font-size: 0.75rem;
         white-space: nowrap;
     }
+    .live-guide.auto-active {
+        border: 2px solid rgba(34,197,94,0.8);
+        box-shadow: 0 0 15px rgba(34,197,94,0.3);
+        animation: pulse-guide 2s infinite;
+    }
+    @keyframes pulse-guide {
+        0%, 100% { border-color: rgba(34,197,94,0.4); }
+        50% { border-color: rgba(34,197,94,1); }
+    }
     .live-status {
         position: absolute;
         top: 12px;
@@ -193,7 +202,7 @@
             </select>
             <label class="auto-toggle">
                 <input type="checkbox" x-model="autoMode">
-                Tu dong
+                Tự động quét
             </label>
         </div>
     </div>
@@ -202,7 +211,7 @@
     <div class="live-video-wrap">
         <video x-ref="video" autoplay playsinline muted></video>
         <canvas x-ref="overlay" class="live-overlay"></canvas>
-        <div class="live-guide" x-show="!lastResult"></div>
+        <div class="live-guide" :class="{ 'auto-active': autoMode }" x-show="!lastResult"></div>
 
         <div class="live-status">
             <span class="live-badge"
@@ -336,10 +345,10 @@ function liveCamera() {
         startAuto() {
             this.stopAuto();
             this.autoTimer = setInterval(() => {
-                if (this.status !== 'scanning') {
+                if (this.status !== 'scanning' && !this.lastResult) {
                     this.captureAndGrade();
                 }
-            }, 3000);
+            }, 1200); // Fast interval acts like an automatic scanner
         },
 
         stopAuto() {

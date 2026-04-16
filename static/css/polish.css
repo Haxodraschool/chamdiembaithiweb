@@ -418,24 +418,10 @@ html {
    13. ENHANCED RESPONSIVE — Tablet (between 768 and 1024)
    ============================================================================= */
 
-@media (max-width: 1024px) and (min-width: 769px) {
-    .sidebar {
-        width: 72px;
-    }
-    
-    .sidebar .logo-text,
-    .sidebar .nav-section-label,
-    .sidebar .nav-item span,
-    .sidebar .user-info {
-        display: none;
-    }
-    
-    .main-content {
-        margin-left: 72px;
-    }
-    
-    .upload-grid {
-        grid-template-columns: 1fr;
+@media (max-width: 1024px) {
+    .dropdown-menu {
+        right: 0;
+        left: auto;
     }
 }
 
@@ -453,7 +439,7 @@ html {
     backdrop-filter: blur(4px);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     .sidebar-backdrop.active {
         display: block;
         animation: fade-in 0.2s ease-out both;
@@ -500,7 +486,7 @@ html {
     color: var(--primary);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     .mobile-home-btn {
         display: flex;
     }
@@ -554,7 +540,7 @@ html {
     -webkit-overflow-scrolling: touch;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     .data-table {
         min-width: 600px;
     }
@@ -566,8 +552,8 @@ html {
    Handles inline styles that can't be overridden in layout.css
    ============================================================================= */
 
-/* ---------- Tablet ≤ 768px ---------- */
-@media (max-width: 768px) {
+/* ---------- Tablet ≤ 1024px ---------- */
+@media (max-width: 1024px) {
     /* Card overflow prevention */
     .card {
         overflow-x: auto;
