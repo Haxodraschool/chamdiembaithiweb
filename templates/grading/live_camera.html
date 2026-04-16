@@ -392,13 +392,15 @@ function liveCamera() {
             const scaleY = vRect.height / H;
 
             // Search for dark squares near 4 corners
-            const margin = 0.08; // 8% inward
-            const roiSize = 0.12; // 12% of dimension
+            const marginX = 0.08;  // 8% inward horizontally
+            const marginTop = 0.16; // 16% from top (doubled = down 100%)
+            const marginBot = 0.16; // 16% from bottom (doubled = up 100%)
+            const roiSize = 0.12;   // 12% of dimension
             const cornerRegions = [
-                { label: 'TL', cx: margin, cy: margin },
-                { label: 'TR', cx: 1 - margin, cy: margin },
-                { label: 'BR', cx: 1 - margin, cy: 1 - margin },
-                { label: 'BL', cx: margin, cy: 1 - margin },
+                { label: 'TL', cx: marginX, cy: marginTop },
+                { label: 'TR', cx: 1 - marginX, cy: marginTop },
+                { label: 'BR', cx: 1 - marginX, cy: 1 - marginBot },
+                { label: 'BL', cx: marginX, cy: 1 - marginBot },
             ];
 
             const found = [];
