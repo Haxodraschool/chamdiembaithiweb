@@ -424,6 +424,7 @@ function liveCamera() {
         _lastTime: 0,
         _detectTimer: null,
         _detectedCorners: [],
+        _cornerHistory: { TL: [], TR: [], BR: [], BL: [] },
 
         async init() {
             try {
@@ -535,7 +536,7 @@ function liveCamera() {
                 { label: 'BL', cx: marginX, cy: 1 - marginBot },
             ];
 
-            const found = [];
+            const rawFound = [];
             for (const region of cornerRegions) {
                 const rx = Math.round(region.cx * W - (roiSize * W) / 2);
                 const ry = Math.round(region.cy * H - (roiSize * H) / 2);
@@ -547,12 +548,22 @@ function liveCamera() {
                 const y2 = Math.min(H, ry + rh);
 
                 const marker = this._findDarkSquare(ctx, x1, y1, x2 - x1, y2 - y1);
-                if (marker) {
-                    found.push({
-                        x: (x1 + marker.cx) * scaleX,
-                        y: (y1 + marker.cy) * scaleY,
-                        label: region.label
-                    });
+                rawFound.push({ label: region.label, detected: !!marker,
+                    x: marker ? (x1 + marker.cx) * scaleX : 0,
+                    y: marker ? (y1 + marker.cy) * scaleY : 0 });
+            }
+
+            // Temporal smoothing: require 2 out of last 3 frames
+            const HISTORY_LEN = 3;
+            const MIN_CONFIRM = 2;
+            const found = [];
+            for (const r of rawFound) {
+                const hist = this._cornerHistory[r.label];
+                hist.push(r.detected ? 1 : 0);
+                if (hist.length > HISTORY_LEN) hist.shift();
+                const hits = hist.reduce((a, b) => a + b, 0);
+                if (hits >= MIN_CONFIRM) {
+                    found.push({ x: r.x, y: r.y, label: r.label });
                 }
             }
 
@@ -606,7 +617,7 @@ function liveCamera() {
                             }
                         }
                     }
-                    grid[gr][gc] = (count > 0 && sum / count < 80) ? 1 : 0;
+                    grid[gr][gc] = (count > 0 && sum / count < 55) ? 1 : 0;
                 }
             }
 
@@ -641,8 +652,8 @@ function liveCamera() {
                         const aspect = blobW / blobH;
                         const fill = area / (blobW * blobH);
 
-                        // Filter: square-ish, filled, reasonable size
-                        if (area >= 4 && aspect > 0.4 && aspect < 2.5 && fill > 0.45 && blobW >= 2 && blobH >= 2) {
+                        // Filter: must be square, well-filled, and big enough
+                        if (area >= 12 && aspect > 0.55 && aspect < 1.8 && fill > 0.6 && blobW >= 4 && blobH >= 4) {
                             if (area > bestArea) {
                                 bestArea = area;
                                 bestBlob = {
