@@ -477,10 +477,24 @@
         margin-left: 0 !important;
     }
 
-    /* Navbar */
+    /* Navbar — fixed trên mobile (sticky không ổn định trong flex parent) */
     .top-navbar {
-        padding: var(--space-3) var(--space-4);
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 56px;
+        padding: var(--space-2) var(--space-4);
         gap: var(--space-2);
+        background-color: var(--surface-container-lowest);
+        backdrop-filter: none;
+        border-bottom: 1px solid var(--outline-variant);
+        z-index: calc(var(--z-sidebar) + 10);
+    }
+
+    /* Offset cho fixed navbar */
+    .page-content {
+        padding-top: calc(56px + var(--space-4));
     }
 
     .navbar-right {
@@ -579,6 +593,7 @@
 
     .page-content {
         padding: var(--space-3);
+        padding-top: calc(56px + var(--space-3));
     }
 
     .auth-card {

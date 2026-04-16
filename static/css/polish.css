@@ -439,18 +439,7 @@ html {
     backdrop-filter: blur(4px);
 }
 
-@media (max-width: 1024px) {
-    .sidebar-backdrop.active {
-        display: block;
-        animation: fade-in 0.2s ease-out both;
-    }
-    
-    /* Mobile hamburger target area */
-    .mobile-menu-btn {
-        display: flex;
-    }
-}
-
+/* Mobile buttons — base styles (hidden on desktop) */
 .mobile-menu-btn {
     display: none;
     width: 36px;
@@ -466,7 +455,6 @@ html {
     background-color: var(--surface-container-high);
 }
 
-/* Mobile Home Button — visible only on mobile */
 .mobile-home-btn {
     display: none;
     width: 36px;
@@ -486,7 +474,17 @@ html {
     color: var(--primary);
 }
 
+/* Mobile overrides — MUST come AFTER base styles so display:flex wins */
 @media (max-width: 1024px) {
+    .sidebar-backdrop.active {
+        display: block;
+        animation: fade-in 0.2s ease-out both;
+    }
+
+    .mobile-menu-btn {
+        display: flex;
+    }
+
     .mobile-home-btn {
         display: flex;
     }
