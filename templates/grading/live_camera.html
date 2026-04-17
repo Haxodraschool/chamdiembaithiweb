@@ -136,7 +136,7 @@
     .live-video-wrap video {
         width: 100%;
         height: 100%;
-        object-fit: contain; /* display without stretching/cropping */
+        object-fit: cover; /* Fill the vertical 9:16 shape entirely */
         max-height: 100%;
         max-width: 100%;
         display: block;
@@ -480,11 +480,12 @@ function liveCamera() {
 
         async init() {
             try {
+                const isPortrait = window.innerHeight > window.innerWidth;
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: 'environment',
-                        width: { ideal: 2160 },
-                        height: { ideal: 2160 }
+                        width: { ideal: isPortrait ? 1080 : 1920 },
+                        height: { ideal: isPortrait ? 1920 : 1080 }
                     },
                     audio: false
                 });
@@ -578,42 +579,56 @@ function liveCamera() {
             overlay.width = vRect.width;
             overlay.height = vRect.height;
             
-            // Calculate object-fit: contain mapping
-            const scale = Math.min(vRect.width / W, vRect.height / H);
+            // Calculate object-fit: cover mapping
+            const scale = Math.max(vRect.width / W, vRect.height / H);
             const drawW = W * scale;
             const drawH = H * scale;
             const offsetX = (vRect.width - drawW) / 2;
             const offsetY = (vRect.height - drawH) / 2;
 
-            // Search for dark squares near 4 corners
-            const marginX = 0.08;  // 8% inward horizontally
-            const marginTop = 0.16; // 16% from top (doubled = down 100%)
-            const marginBot = 0.16; // 16% from bottom (doubled = up 100%)
-            const roiSize = 0.12;   // 12% of dimension
-            const cornerRegions = [
+            // Search regions relative to the VISIBLE screen
+            const marginX = vRect.width * 0.08;
+            const marginTop = vRect.height * 0.16;
+            const marginBot = vRect.height * 0.16;
+            const roiSizeW = vRect.width * 0.12;
+            const roiSizeH = vRect.height * 0.12;
+
+            const screenRegions = [
                 { label: 'TL', cx: marginX, cy: marginTop },
-                { label: 'TR', cx: 1 - marginX, cy: marginTop },
-                { label: 'BR', cx: 1 - marginX, cy: 1 - marginBot },
-                { label: 'BL', cx: marginX, cy: 1 - marginBot },
+                { label: 'TR', cx: vRect.width - marginX, cy: marginTop },
+                { label: 'BR', cx: vRect.width - marginX, cy: vRect.height - marginBot },
+                { label: 'BL', cx: marginX, cy: vRect.height - marginBot },
             ];
 
             const rawFound = [];
-            for (const region of cornerRegions) {
-                const rx = Math.round(region.cx * W - (roiSize * W) / 2);
-                const ry = Math.round(region.cy * H - (roiSize * H) / 2);
-                const rw = Math.round(roiSize * W);
-                const rh = Math.round(roiSize * H);
-                const x1 = Math.max(0, rx);
-                const y1 = Math.max(0, ry);
-                const x2 = Math.min(W, rx + rw);
-                const y2 = Math.min(H, ry + rh);
+            for (const sReg of screenRegions) {
+                // Map screen coordinate back to raw video coordinate
+                const rawCx = (sReg.cx - offsetX) / scale;
+                const rawCy = (sReg.cy - offsetY) / scale;
+                const rawRw = roiSizeW / scale;
+                const rawRh = roiSizeH / scale;
+
+                const rawX = Math.round(rawCx - rawRw / 2);
+                const rawY = Math.round(rawCy - rawRh / 2);
+
+                const x1 = Math.max(0, rawX);
+                const y1 = Math.max(0, rawY);
+                const x2 = Math.min(W, rawX + rawRw);
+                const y2 = Math.min(H, rawY + rawRh);
 
                 const marker = this._findDarkSquare(ctx, x1, y1, x2 - x1, y2 - y1);
-                rawFound.push({ label: region.label, detected: !!marker,
-                    orig_x: marker ? x1 + marker.cx : 0,
-                    orig_y: marker ? y1 + marker.cy : 0,
-                    x: marker ? offsetX + (x1 + marker.cx) * scale : 0,
-                    y: marker ? offsetY + (y1 + marker.cy) * scale : 0 });
+                
+                const origX = marker ? x1 + marker.cx : 0;
+                const origY = marker ? y1 + marker.cy : 0;
+
+                rawFound.push({ 
+                    label: sReg.label, 
+                    detected: !!marker,
+                    orig_x: origX,
+                    orig_y: origY,
+                    x: marker ? offsetX + origX * scale : 0,
+                    y: marker ? offsetY + origY * scale : 0 
+                });
             }
 
             // Temporal smoothing: require 2 out of last 3 frames
@@ -653,19 +668,15 @@ function liveCamera() {
             const baseSize = Math.min(overlay.width, overlay.height) * 0.025;
             const squareSize = Math.round(baseSize * 7.0);
 
-            // Draw squares at FIXED positions mapped from raw video coordinates
-            for (const region of cornerRegions) {
-                // To get raw target offset, map region.cx * W back out
-                const rawX = region.cx * W;
-                const rawY = region.cy * H;
-                const fx = offsetX + rawX * scale;
-                const fy = offsetY + rawY * scale;
-                const detected = found.some(f => f.label === region.label);
+            // Draw squares at FIXED positions mapped from screen coordinates
+            for (const sReg of screenRegions) {
+                const detected = found.some(f => f.label === sReg.label);
                 if (detected) {
+                    const f = found.find(f => f.label === sReg.label);
                     const color = this.quadValid ? 'rgba(34,197,94,0.85)' : 'rgba(251,191,36,0.85)';
-                    this._drawCornerSquare(oCtx, fx, fy, squareSize, color, true);
+                    this._drawCornerSquare(oCtx, f.x, f.y, squareSize, color, true);
                 } else {
-                    this._drawCornerSquare(oCtx, fx, fy, squareSize, 'rgba(255,255,255,0.35)', false);
+                    this._drawCornerSquare(oCtx, sReg.cx, sReg.cy, squareSize, 'rgba(255,255,255,0.35)', false);
                 }
             }
 
