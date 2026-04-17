@@ -37,6 +37,7 @@
         aspect-ratio: 9 / 16;
         max-height: 85vh;
         margin: 0 auto;
+        transition: aspect-ratio 0.3s, max-width 0.3s;
     }
 
     /* ── Fullscreen mode ── */
@@ -129,7 +130,7 @@
     .live-video-wrap video {
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
         display: block;
     }
     .live-overlay {
@@ -464,22 +465,49 @@ function liveCamera() {
 
         async init() {
             try {
-                // Request portrait camera — ideal hints, camera gives best match
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: { ideal: 'environment' },
-                        width: { ideal: 1080 },
-                        height: { ideal: 1920 },
-                    },
-                    audio: false
-                });
+                // Multi-strategy: try hard to get portrait video
+                let stream = null;
+                const strategies = [
+                    // 1. Back camera, portrait hints
+                    { video: { facingMode: { exact: 'environment' }, width: { ideal: 1080 }, height: { ideal: 1920 } }, audio: false },
+                    // 2. Back camera, no resolution hints
+                    { video: { facingMode: 'environment' }, audio: false },
+                    // 3. Any camera, portrait hints
+                    { video: { width: { ideal: 1080 }, height: { ideal: 1920 } }, audio: false },
+                    // 4. Any camera
+                    { video: true, audio: false },
+                ];
+                for (const constraints of strategies) {
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia(constraints);
+                        break;
+                    } catch(e) { /* try next */ }
+                }
+                if (!stream) throw new Error('All camera strategies failed');
+
                 this.$refs.video.srcObject = stream;
                 this.$refs.video.onloadedmetadata = () => {
                     this.cameraReady = true;
                     this.statusText = 'San sang — Nhan nut de cham';
 
-                    // Container stays 9:16 portrait. Video contain inside.
-                    // No dynamic adapt — prevents landscape takeover.
+                    // Adapt container to actual video ratio
+                    // contain + matching ratio = perfect fill, NO zoom, NO bars
+                    const vw = this.$refs.video.videoWidth;
+                    const vh = this.$refs.video.videoHeight;
+                    const wrap = this.$refs.video.closest('.live-video-wrap');
+                    if (vw && vh) {
+                        const ratio = vw / vh;
+                        wrap.style.aspectRatio = vw + ' / ' + vh;
+                        if (vh >= vw) {
+                            // Portrait video
+                            wrap.style.maxWidth = 'calc(85vh * ' + ratio + ')';
+                        } else {
+                            // Landscape video (desktop webcam)
+                            wrap.style.maxWidth = '100%';
+                            wrap.style.maxHeight = '70vh';
+                        }
+                    }
+
                     this.resizeOverlay();
                     this.startCornerDetection();
                     // Auto-enter fullscreen on mobile
@@ -566,18 +594,17 @@ function liveCamera() {
             overlay.width = vRect.width;
             overlay.height = vRect.height;
             
-            // object-fit:cover — video fills container, sides cropped
-            const scale = Math.max(vRect.width / W, vRect.height / H);
+            // object-fit:contain — container matches video ratio, so perfect fill
+            const scale = Math.min(vRect.width / W, vRect.height / H);
             const drawW = W * scale;
             const drawH = H * scale;
-            const offsetX = (vRect.width - drawW) / 2;  // negative = cropped
+            const offsetX = (vRect.width - drawW) / 2;
             const offsetY = (vRect.height - drawH) / 2;
 
-            // Visible area = container bounds (cover fills it entirely)
-            const visW = vRect.width;
-            const visH = vRect.height;
-            const visX = 0;
-            const visY = 0;
+            const visW = drawW;
+            const visH = drawH;
+            const visX = offsetX;
+            const visY = offsetY;
 
             const marginX = visW * 0.08;
             const marginTop = visH * 0.16;
