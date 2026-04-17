@@ -478,16 +478,8 @@ function liveCamera() {
                     this.cameraReady = true;
                     this.statusText = 'San sang — Nhan nut de cham';
 
-                    // Adapt container aspect-ratio to actual video ratio
-                    // This eliminates black bars AND prevents zoom
-                    const vw = this.$refs.video.videoWidth;
-                    const vh = this.$refs.video.videoHeight;
-                    if (vw && vh) {
-                        const wrap = this.$refs.video.closest('.live-video-wrap');
-                        wrap.style.aspectRatio = vw + ' / ' + vh;
-                        wrap.style.maxWidth = 'calc(85vh * ' + vw + ' / ' + vh + ')';
-                    }
-
+                    // Container stays 9:16 portrait. Video contain inside.
+                    // No dynamic adapt — prevents landscape takeover.
                     this.resizeOverlay();
                     this.startCornerDetection();
                     // Auto-enter fullscreen on mobile
