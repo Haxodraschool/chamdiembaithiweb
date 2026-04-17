@@ -1515,18 +1515,9 @@ def preprocess(warped, enhance_camera=False):
     """
     Tiền xử lý: trả về ảnh xám (blur) cho detection.
 
-    QUAN TRỌNG: Detection dùng ảnh GRAYSCALE gốc (không binary)
-    để nhận diện bút chì (xám nhạt). Adaptive threshold sẽ mất
-    màu xám của bút chì → chuyển sang đo MEAN DARKNESS trên gray.
-
-    Binary threshold CHỈ tạo ra cho debug visualization.
-
-    Pipeline:
-      1) erase_printed_text() — LỚP 1 punch-hole xóa chữ in
-      2) Illumination Flattening — làm phẳng nền chia độ sáng nền
-      3) GaussianBlur — giảm noise
-
-    Trả về: gray (blurred, dùng detect), thresh (debug), cleaned (debug)
+    Nâng cấp: Illumination Flattening (Làm phẳng ánh sáng)
+    - Giúp triệt tiêu bóng đổ và chênh lệch sáng tối giữa các vùng trên phiếu.
+    - Giúp bút chì nhạt trở nên nổi bật hơn sau khi chia cho nền.
     """
     # --- LỚP 1: erase_printed_text (punch-hole) ---
     warped_clean = erase_printed_text(warped)
@@ -1534,12 +1525,18 @@ def preprocess(warped, enhance_camera=False):
     gray_raw = cv2.cvtColor(warped_clean, cv2.COLOR_BGR2GRAY)
 
     # --- Làm phẳng nền giấy (Illumination Flattening / Background Division) ---
-    # Dùng phép toán hình thái học với kernel lớn để xấp xỉ phần nền
+    # Dùng MORPH_CLOSE để ước lượng 'độ sáng của nền' (bỏ qua các vết mực/bút chì)
     bg_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (51, 51))
     background = cv2.morphologyEx(gray_raw, cv2.MORPH_CLOSE, bg_kernel)
     
-    # Chia cho nền để san phẳng sáng, sau đó scale về 0-255
+    # Chia ảnh gốc cho nền để triệt tiêu chênh lệch ánh sáng cục bộ
+    # flat_gray = (gray_raw / background) * 255
     flat_gray = cv2.divide(gray_raw, background, scale=255)
+
+    # Tăng cường độ tương phản (Histogram Equalization nhẹ) nếu cần
+    if enhance_camera:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        flat_gray = clahe.apply(flat_gray)
 
     gray = cv2.GaussianBlur(flat_gray, (5, 5), 0)
 
@@ -1645,44 +1642,57 @@ def mask_printed_text(thresh_img):
 def is_bubble_filled(gray_img, cx, cy, radius=BUBBLE_RADIUS,
                      threshold=FILL_THRESHOLD, check_circularity=True):
     """
-    Kiểm tra bubble tại (cx, cy) trên ảnh GRAYSCALE (không phải binary).
-
-    Dùng MEAN INTENSITY để phát hiện bút chì (xám) lẫn mực (đen):
-      Fill ratio = 1 - (mean_intensity / 255)
-        - Bubble trống (giấy trắng):    ratio ~0.08-0.18
-        - Bubble tô bút chì nhạt:       ratio ~0.28-0.40
-        - Bubble tô bút chì đậm:        ratio ~0.40-0.60
-        - Bubble tô mực đen:            ratio ~0.65-0.90
-
-    Ưu điểm so với binary threshold:
-      - Bút chì xám nhạt KHÔNG bị mất (binary sẽ convert xám → trắng)
-      - Moiré trên ảnh phone bị triệt tiêu bởi mean (trung bình hóa)
-      - Tự thích ứng ánh sáng qua 2-phase detection
-
-    Trả về: (is_filled: bool, fill_ratio: float)
+    Kiểm tra bubble tại (cx, cy) bằng hệ tọa độ NGƯỠNG ĐỘNG (Adaptive Threshold).
+    
+    Cơ chế: 
+    1. Lấy vùng ảnh bao quanh bubble (ROI).
+    2. Tính độ sáng trung bình của 'vòng nhẫn' (ring) bao quanh bubble để tìm mức TRẮNG CỤC BỘ.
+    3. Tính độ sáng trung bình của lõi Bubble.
+    4. Fill Ratio = 1 - (Bubble_Mean / Local_White_Mean).
+    
+    Ưu điểm: Nếu 1 góc phiếu bị tối (shadow), Local_White_Mean sẽ giảm xuống, 
+    giúp phép chia vẫn cho ra kết quả Ratio chuẩn xác, không bị chấm nhầm.
     """
     h, w = gray_img.shape[:2]
-    x1 = max(0, int(cx - radius))
-    y1 = max(0, int(cy - radius))
-    x2 = min(w, int(cx + radius))
-    y2 = min(h, int(cy + radius))
+    # Mở rộng vùng lấy mẫu để lấy được cả vùng trắng xung quanh bubble
+    pad = 12 
+    x1 = max(0, int(cx - radius - pad))
+    y1 = max(0, int(cy - radius - pad))
+    x2 = min(w, int(cx + radius + pad))
+    y2 = min(h, int(cy + radius + pad))
 
     roi = gray_img[y1:y2, x1:x2]
-    if roi.size == 0:
+    if roi.size == 0 or roi.shape[0] < radius*2 or roi.shape[1] < radius*2:
         return False, 0.0
 
-    # Circular mask
-    mask = np.zeros(roi.shape[:2], dtype=np.uint8)
-    cv2.circle(mask, (int(cx - x1), int(cy - y1)), radius, 255, -1)
+    # Tọa độ tương đối của tâm trong ROI
+    rx, ry = int(cx - x1), int(cy - y1)
 
-    # Lấy pixel values trong vòng tròn
-    pixels = roi[mask == 255]
-    if len(pixels) == 0:
-        return False, 0.0
+    # 1. Tạo mask cho lõi BUBBLE (để tính độ đen)
+    bubble_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
+    cv2.circle(bubble_mask, (rx, ry), radius, 255, -1)
+    bubble_pixels = roi[bubble_mask == 255]
+    if len(bubble_pixels) == 0: return False, 0.0
+    bubble_mean = np.mean(bubble_pixels)
 
-    # Fill ratio = 1 - (mean / 255): TỐI (bút chì/mực) = cao, SÁNG (giấy) = thấp
-    mean_val = float(np.mean(pixels))
-    ratio = 1.0 - (mean_val / 255.0)
+    # 2. Tạo mask cho VÒNG NHẪN (để tính độ trắng của giấy xung quanh)
+    # Lấy từ radius+4 đến radius+10
+    ring_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
+    cv2.circle(ring_mask, (rx, ry), radius + 10, 255, -1)
+    cv2.circle(ring_mask, (rx, ry), radius + 4, 0, -1)
+    ring_pixels = roi[ring_mask == 255]
+    
+    # Nếu không lấy được mẫu lề (sát mép ảnh), dùng chuẩn 255 hoặc trung bình ảnh
+    local_white = np.mean(ring_pixels) if ring_pixels.size > 10 else 255.0
+    # Đảm bảo local_white không quá thấp gây lỗi chia cho 0 hoặc noise
+    local_white = max(local_white, 50.0)
+
+    # 3. Tính tỉ lệ lấp đầy thích ứng
+    # Ratio càng cao -> càng đen hơn so với giấy xung quanh
+    ratio = 1.0 - (bubble_mean / local_white)
+    
+    # Clip ratio trong khoảng [0, 1]
+    ratio = max(0.0, min(1.0, ratio))
 
     if ratio <= threshold:
         return False, ratio
