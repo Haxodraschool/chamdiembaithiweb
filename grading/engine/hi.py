@@ -63,6 +63,37 @@ CIRCULARITY_THRESHOLD = 0.6
 # +8px margin cho sai lệch warp ảnh phone (trước: +3px quá ít)
 BUBBLE_PROTECT_RADIUS = BUBBLE_RADIUS + 8
 
+# --- Hybrid OpenCV + CNN (bubble classifier) ---
+HYBRID_CNN_ENABLE = True
+BUBBLE_CNN_PATH = os.path.join(os.path.dirname(__file__), "bubble_cnn.pth")
+CNN_IMG_SIZE = 32
+CNN_FILL_THRESHOLD = 0.5
+HYBRID_RATIO_LOW = 0.12
+HYBRID_RATIO_HIGH = 0.45
+
+# Part III hybrid thresholds (scores are 0-1)
+P3_SIGN_SCORE_MIN = 0.18
+P3_COMMA_SCORE_MIN = 0.10
+P3_COMMA_GAP_MIN = 0.05
+P3_DIGIT_SCORE_MIN = 0.28
+P3_DIGIT_GAP_MIN = 0.05
+P3_OCR_ENABLE = True
+P3_OCR_BOX_Y_OFFSET = -55  # relative to PART3_SIGN_Y
+P3_OCR_BOX_SIZE = 34
+P3_OCR_INK_MIN = 0.04
+P3_OCR_INK_MAX = 0.45
+
+# SBD/Mã đề thresholds (lighter pencil marks)
+SBD_MADE_TOP_MIN = 0.12
+SBD_MADE_GAP_MIN = 0.02
+SBD_MADE_FALLBACK_TOP_MIN = 0.10
+SBD_MADE_FALLBACK_GAP_MIN = 0.08
+
+_CNN_MODEL = None
+_CNN_DEVICE = None
+_CNN_READY = False
+_CNN_ERROR = None
+
 # ╔════════════════════════════════════════════════════════════════════════╗
 # ║              TỌA ĐỘ PHẦN I - 40 câu ABCD (4 cột x 10 hàng)        ║
 # ╚════════════════════════════════════════════════════════════════════════╝
@@ -897,7 +928,10 @@ def _draw_debug(debug_img, paper_pts, marker_pts, label, color):
     # Viền giấy (xanh lá)
     cv2.drawContours(debug_img, [paper_pts.astype(int)], -1, (0, 255, 0), 3)
     for pt in paper_pts:
-        cv2.circle(debug_img, (int(pt[0]), int(pt[1])), 12, (0, 0, 255), -1)
+        cx, cy = int(pt[0]), int(pt[1])
+        box_half = 12
+        cv2.rectangle(debug_img, (cx - box_half, cy - box_half),
+                      (cx + box_half, cy + box_half), (0, 0, 255), 2)
     # Markers nếu có (cam)
     if marker_pts is not None:
         for pt in marker_pts:
@@ -1624,6 +1658,79 @@ def detect_section_offsets(gray):
     return offsets
 
 
+def _cluster_1d(values, max_gap):
+    """Cluster 1D values by max gap, return cluster centers."""
+    if not values:
+        return []
+    vals = sorted(values)
+    clusters = [[vals[0]]]
+    for v in vals[1:]:
+        if v - clusters[-1][-1] <= max_gap:
+            clusters[-1].append(v)
+        else:
+            clusters.append([v])
+    return [int(round(sum(c) / len(c))) for c in clusters]
+
+
+def detect_part3_offset_from_digits(gray):
+    """Estimate Part III vertical offset from digit bubble rows."""
+    h, w = gray.shape[:2]
+
+    cols = []
+    for blk in PART3_BLOCKS:
+        cols.append(blk["sign_x"])
+        cols.extend(blk["cols_x"])
+
+    if not cols:
+        return None
+
+    x_min = max(0, int(min(cols) - BUBBLE_RADIUS * 3))
+    x_max = min(w, int(max(cols) + BUBBLE_RADIUS * 3))
+    y_min = max(0, int(PART3_SIGN_Y - BUBBLE_RADIUS * 3))
+    y_max = min(h, int(PART3_DIGIT_START_Y + 9 * PART3_DIGIT_STEP_Y + BUBBLE_RADIUS * 3))
+
+    roi = gray[y_min:y_max, x_min:x_max]
+    if roi.size == 0:
+        return None
+
+    roi_blur = cv2.medianBlur(roi, 5)
+    circles = cv2.HoughCircles(
+        roi_blur,
+        cv2.HOUGH_GRADIENT,
+        dp=1,
+        minDist=20,
+        param1=50,
+        param2=25,
+        minRadius=8,
+        maxRadius=18,
+    )
+    if circles is None:
+        return None
+
+    ys = [int(c[1]) + y_min for c in circles[0]]
+    row_centers = _cluster_1d(ys, max_gap=10)
+    if not row_centers:
+        return None
+
+    digit_rows = [y for y in row_centers if y >= PART3_DIGIT_START_Y - 20]
+    if not digit_rows:
+        digit_rows = row_centers
+
+    expected_rows = [int(PART3_DIGIT_START_Y + d * PART3_DIGIT_STEP_Y) for d in range(10)]
+    offsets = []
+    for exp in expected_rows:
+        nearest = min(digit_rows, key=lambda y: abs(y - exp))
+        if abs(nearest - exp) <= 25:
+            offsets.append(nearest - exp)
+
+    if len(offsets) < 4:
+        return None
+
+    offset = int(round(float(np.median(offsets))))
+    # Clamp to avoid outlier shift from bad circle detection.
+    return max(-12, min(12, offset))
+
+
 def mask_printed_text(thresh_img):
     """
     LỚP 3 (safety net): Tô ĐEN vùng text trên ảnh threshold.
@@ -1698,6 +1805,186 @@ def is_bubble_filled(gray_img, cx, cy, radius=BUBBLE_RADIUS,
         return False, ratio
 
     return True, ratio
+
+
+def _crop_bubble_for_cnn(gray_img, cx, cy, radius=BUBBLE_RADIUS, crop_size=CNN_IMG_SIZE):
+    """Crop a square around bubble center for CNN input."""
+    h, w = gray_img.shape[:2]
+    pad = radius + 4
+    x1 = max(0, int(cx - pad))
+    y1 = max(0, int(cy - pad))
+    x2 = min(w, int(cx + pad))
+    y2 = min(h, int(cy + pad))
+    roi = gray_img[y1:y2, x1:x2]
+    if roi.size == 0:
+        return None
+    return cv2.resize(roi, (crop_size, crop_size), interpolation=cv2.INTER_AREA)
+
+
+def _load_bubble_cnn():
+    """Lazy-load CNN model if available."""
+    global _CNN_MODEL, _CNN_DEVICE, _CNN_READY, _CNN_ERROR
+    if _CNN_READY or _CNN_ERROR is not None:
+        return
+    if not HYBRID_CNN_ENABLE:
+        _CNN_ERROR = "disabled"
+        return
+    if not os.path.exists(BUBBLE_CNN_PATH):
+        _CNN_ERROR = "model_not_found"
+        return
+    try:
+        import torch
+        from grading.engine.train_bubble_cnn import BubbleCNN
+    except Exception as exc:
+        _CNN_ERROR = str(exc)
+        return
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = BubbleCNN().to(device)
+    try:
+        state = torch.load(BUBBLE_CNN_PATH, map_location=device, weights_only=True)
+    except TypeError:
+        state = torch.load(BUBBLE_CNN_PATH, map_location=device)
+    model.load_state_dict(state)
+    model.eval()
+
+    _CNN_MODEL = model
+    _CNN_DEVICE = device
+    _CNN_READY = True
+
+
+def _predict_bubble_cnn(gray_img, cx, cy):
+    """Predict fill probability using CNN. Returns None if unavailable."""
+    _load_bubble_cnn()
+    if not _CNN_READY:
+        return None
+
+    crop = _crop_bubble_for_cnn(gray_img, cx, cy)
+    if crop is None:
+        return None
+
+    import torch
+    img = crop.astype(np.float32) / 255.0
+    tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).to(_CNN_DEVICE)
+
+    with torch.no_grad():
+        out = _CNN_MODEL(tensor)
+        probs = torch.softmax(out, dim=1)
+        return float(probs[0, 1].item())
+
+
+def _hybrid_score(gray_img, cx, cy, threshold=FILL_THRESHOLD, force_cnn=False):
+    """Return (score, ratio, cnn_conf) using OpenCV + CNN when needed."""
+    _, ratio = is_bubble_filled(gray_img, cx, cy, threshold=threshold)
+    cnn_conf = None
+
+    if HYBRID_CNN_ENABLE and (force_cnn or (HYBRID_RATIO_LOW <= ratio <= HYBRID_RATIO_HIGH)):
+        cnn_conf = _predict_bubble_cnn(gray_img, cx, cy)
+
+    if cnn_conf is None:
+        return ratio, ratio, None
+
+    score = max(ratio, cnn_conf)
+    return score, ratio, cnn_conf
+
+
+def _find_p3_box_near(gray_img, cx, cy, box_size=P3_OCR_BOX_SIZE):
+    """Find a handwriting box near (cx, cy). Returns (x1,y1,x2,y2) or None."""
+    h, w = gray_img.shape[:2]
+    half = int(box_size / 2)
+    search = int(box_size * 2.0)
+    x1 = max(0, int(cx - search))
+    y1 = max(0, int(cy - search))
+    x2 = min(w, int(cx + search))
+    y2 = min(h, int(cy + search))
+    roi = gray_img[y1:y2, x1:x2]
+    if roi.size == 0:
+        return None
+
+    thr = cv2.adaptiveThreshold(
+        roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 31, 7
+    )
+    thr = cv2.medianBlur(thr, 3)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    thr = cv2.dilate(thr, kernel, iterations=1)
+    cnts, _ = cv2.findContours(thr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best = None
+    for c in cnts:
+        area = cv2.contourArea(c)
+        if area < 120 or area > 5000:
+            continue
+        x, y, bw, bh = cv2.boundingRect(c)
+        aspect = bw / float(bh) if bh > 0 else 0
+        if 0.5 <= aspect <= 1.8:
+            cx_c = x + bw / 2
+            cy_c = y + bh / 2
+            dist = (cx_c - (cx - x1)) ** 2 + (cy_c - (cy - y1)) ** 2
+            if best is None or dist < best[0]:
+                best = (dist, x, y, bw, bh)
+
+    if best is None:
+        return None
+
+    _, bx, by, bw, bh = best
+    gx1 = max(0, int(x1 + bx))
+    gy1 = max(0, int(y1 + by))
+    gx2 = min(w, int(x1 + bx + bw))
+    gy2 = min(h, int(y1 + by + bh))
+    return gx1, gy1, gx2, gy2
+
+
+def _default_p3_box(gray_img, cx, cy, box_size=P3_OCR_BOX_SIZE):
+    """Fallback box centered at (cx, cy)."""
+    h, w = gray_img.shape[:2]
+    half = int(box_size / 2)
+    x1 = max(0, int(cx - half))
+    y1 = max(0, int(cy - half))
+    x2 = min(w, int(cx + half))
+    y2 = min(h, int(cy + half))
+    return x1, y1, x2, y2
+
+
+def _ocr_digit_from_box(gray_img, box):
+    """OCR a single digit from a handwriting box. Returns (digit, ink_ratio)."""
+    if box is None:
+        return -1, 0.0
+    try:
+        import pytesseract
+    except Exception:
+        return -1, 0.0
+
+    x1, y1, x2, y2 = box
+    roi = gray_img[y1:y2, x1:x2]
+    if roi.size == 0:
+        return -1, 0.0
+
+    # Remove box border by cropping inner region.
+    h, w = roi.shape[:2]
+    margin = max(2, int(min(h, w) * 0.1))
+    roi = roi[margin:h - margin, margin:w - margin]
+    if roi.size == 0:
+        return -1, 0.0
+
+    # Resize to help OCR.
+    roi = cv2.resize(roi, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+    blur = cv2.GaussianBlur(roi, (3, 3), 0)
+    _, thr = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    ink_ratio = float(np.count_nonzero(thr)) / float(thr.size)
+    if ink_ratio < P3_OCR_INK_MIN or ink_ratio > P3_OCR_INK_MAX:
+        return -1, ink_ratio
+    thr = cv2.medianBlur(thr, 3)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    thr = cv2.dilate(thr, kernel, iterations=1)
+    config = "--psm 10 -c tessedit_char_whitelist=0123456789"
+    txt = pytesseract.image_to_string(thr, config=config)
+    if not txt:
+        txt = pytesseract.image_to_string(roi, config=config)
+    txt = (txt or "").strip()
+    if len(txt) != 1:
+        return -1, ink_ratio
+    ch = txt[0]
+    return (int(ch) if ch.isdigit() else -1), ink_ratio
 
 
 # ╔════════════════════════════════════════════════════════════════════════╗
@@ -1781,13 +2068,21 @@ def extract_part1(cleaned_img, y_offset=0):
             q = q_start + row
             cy = sy + row * dy + y_offset
             ratios = {}
+            ratios_cv = {}
+            ratios_cnn = {}
 
             for ci, choice in enumerate(PART1_CHOICES):
                 cx = sx + ci * dx
-                _, ratio = is_bubble_filled(cleaned_img, cx, cy)
-                ratios[choice] = round(ratio, 3)
+                score, ratio, cnn_conf = _hybrid_score(cleaned_img, cx, cy)
+                ratios[choice] = round(score, 3)
+                ratios_cv[choice] = round(ratio, 3)
+                if cnn_conf is not None:
+                    ratios_cnn[choice] = round(cnn_conf, 3)
 
-            details[q] = ratios
+            details[q] = ratios_cv if not ratios_cnn else {
+                "ratio": ratios_cv,
+                "cnn": ratios_cnn,
+            }
             filled_choices = _detect_filled_choices(ratios)
 
             if len(filled_choices) == 1:
@@ -1823,16 +2118,16 @@ def extract_part2(cleaned_img, y_offset=0):
         for ri, label in enumerate(PART2_ROWS):
             cy = sy + ri * PART2_STEP_Y + y_offset
             # Cột Đúng
-            _, r_dung = is_bubble_filled(cleaned_img, sx, cy)
+            score_dung, r_dung, _ = _hybrid_score(cleaned_img, sx, cy)
             # Cột Sai
-            _, r_sai = is_bubble_filled(cleaned_img, sx + PART2_STEP_X, cy)
+            score_sai, r_sai, _ = _hybrid_score(cleaned_img, sx + PART2_STEP_X, cy)
 
             r_dung = round(r_dung, 3)
             r_sai = round(r_sai, 3)
             q_det[label] = {"Dung": r_dung, "Sai": r_sai}
 
             # Dùng _detect_filled_choices cho cả Part II
-            filled = _detect_filled_choices({"Dung": r_dung, "Sai": r_sai})
+            filled = _detect_filled_choices({"Dung": score_dung, "Sai": score_sai})
 
             if len(filled) == 1:
                 q_ans[label] = filled[0]
@@ -1869,56 +2164,99 @@ def extract_part3(cleaned_img, y_offset=0):
         q_det = {}
 
         # 1) Kiểm tra dấu trừ (-)
-        is_neg, r_neg = is_bubble_filled(cleaned_img, blk["sign_x"], PART3_SIGN_Y + y_offset)
+        sign_score, r_neg, _ = _hybrid_score(
+            cleaned_img, blk["sign_x"], PART3_SIGN_Y + y_offset, force_cnn=True
+        )
+        is_neg = sign_score >= P3_SIGN_SCORE_MIN
         q_det["sign"] = round(r_neg, 3)
 
         # 2) Kiểm tra dấu phẩy (.) - cột nào được tô
         #    Comma dùng threshold riêng (0.35) vì dot nhỏ, dễ false positive
         COMMA_THRESHOLD = 0.22
         comma_col = -1
-        comma_filled_count = 0
+        comma_scores = []
         comma_ratios = []
         for ci, cx in enumerate(cols_x):
-            is_f, r = is_bubble_filled(cleaned_img, cx, PART3_COMMA_Y + y_offset,
-                                       threshold=COMMA_THRESHOLD)
-            comma_ratios.append(round(r, 3))
-            if is_f:
-                comma_col = ci
-                comma_filled_count += 1
-        if comma_filled_count > 1:
-            comma_col = -1  # Tô trùng → hủy dấu phẩy
+            score, ratio, _ = _hybrid_score(
+                cleaned_img, cx, PART3_COMMA_Y + y_offset,
+                threshold=COMMA_THRESHOLD, force_cnn=True
+            )
+            comma_scores.append(score)
+            comma_ratios.append(round(ratio, 3))
         q_det["comma"] = comma_ratios
+        if comma_scores:
+            order = sorted(range(len(comma_scores)), key=lambda i: comma_scores[i], reverse=True)
+            top_i = order[0]
+            top_s = comma_scores[top_i]
+            second_s = comma_scores[order[1]] if len(order) > 1 else 0.0
+            if top_s >= P3_COMMA_SCORE_MIN and (top_s - second_s) >= P3_COMMA_GAP_MIN:
+                comma_col = top_i
 
         # 3) Đọc 4 cột số (mỗi cột: chọn digit 0-9 có ratio cao nhất)
         #    Dùng logic MAX dominant (giống SBD/MĐ) thay vì _detect_filled_choices
         #    vì 10 bubble/cột khiến adaptive phase quá nhạy → false positive
         digits = []
         digit_det = []
+        digit_scores = []
         for ci, cx in enumerate(cols_x):
             col_ratios = {}
+            col_scores = {}
             for d in range(10):
                 cy = PART3_DIGIT_START_Y + d * PART3_DIGIT_STEP_Y + y_offset
-                _, r = is_bubble_filled(cleaned_img, cx, cy)
-                col_ratios[str(d)] = round(r, 3)
+                score, ratio, _ = _hybrid_score(cleaned_img, cx, cy, force_cnn=True)
+                col_scores[str(d)] = round(score, 3)
+                col_ratios[str(d)] = round(ratio, 3)
             digit_det.append({int(k): v for k, v in col_ratios.items()})
+            digit_scores.append({int(k): v for k, v in col_scores.items()})
             # Pick MAX ratio nếu nổi bật (gap > 0.05 so với 2nd)
-            sorted_items = sorted(col_ratios.items(), key=lambda x: x[1], reverse=True)
-            top_d, top_r = sorted_items[0]
-            second_r = sorted_items[1][1] if len(sorted_items) > 1 else 0
-            if top_r > FILL_THRESHOLD and (top_r - second_r) > 0.05:
+            sorted_items = sorted(col_scores.items(), key=lambda x: x[1], reverse=True)
+            top_d, top_s = sorted_items[0]
+            second_s = sorted_items[1][1] if len(sorted_items) > 1 else 0
+            if top_s >= P3_DIGIT_SCORE_MIN and (top_s - second_s) >= P3_DIGIT_GAP_MIN:
                 digits.append(int(top_d))
-            elif top_r > 0.25 and (top_r - second_r) > 0.08:
-                digits.append(int(top_d))  # Bút chì nhạt nhưng nổi rõ
             else:
                 digits.append(-1)  # Không tô hoặc không rõ
         q_det["digits"] = digit_det
+        q_det["digits_score"] = digit_scores
+
+        # 3b) OCR fallback from handwriting boxes (if enabled)
+        ocr_digits = []
+        ocr_boxes = []
+        ocr_ink = []
+        digit_count = sum(1 for d in digits if d >= 0)
+        allow_ocr = P3_OCR_ENABLE and comma_col >= 0 and digit_count <= 1
+        if allow_ocr:
+            ocr_digits = [-1] * len(cols_x)
+            box_y = PART3_SIGN_Y + y_offset + P3_OCR_BOX_Y_OFFSET
+            for ci, cx in enumerate(cols_x):
+                box = _find_p3_box_near(cleaned_img, cx, box_y)
+                if box is None:
+                    box = _default_p3_box(cleaned_img, cx, box_y)
+                ocr_boxes.append(box)
+                digit, ink_ratio = _ocr_digit_from_box(cleaned_img, box)
+                ocr_ink.append(round(ink_ratio, 3))
+                if digits[ci] >= 0:
+                    continue
+                ocr_digits[ci] = digit
+                if ocr_digits[ci] >= 0:
+                    digits[ci] = ocr_digits[ci]
+        q_det["ocr_digits"] = ocr_digits
+        q_det["ocr_boxes"] = ocr_boxes
+        q_det["ocr_ink"] = ocr_ink
+        q_det["picked"] = {
+            "sign": is_neg,
+            "comma_col": comma_col,
+            "digits": digits,
+        }
         details[q] = q_det
 
         # 4) Ghép chuỗi số
         num_str = ""
         for i, d in enumerate(digits):
             if i == comma_col and num_str:
-                num_str += "."
+                has_after = any(dd >= 0 for dd in digits[i:])
+                if has_after:
+                    num_str += "."
             if d >= 0:
                 num_str += str(d)
         if is_neg and num_str:
@@ -1950,11 +2288,14 @@ def extract_sbd_made(cleaned_img):
                                         check_circularity=False)
                 col_r[d] = round(r, 3)
             det.append(col_r)
-            # Pick MAX ratio nếu nổi bật so với 2nd (gap > 0.02)
+            # Pick MAX ratio nếu nổi bật so với 2nd
             sorted_items = sorted(col_r.items(), key=lambda x: x[1], reverse=True)
             top_d, top_r = sorted_items[0]
             second_r = sorted_items[1][1] if len(sorted_items) > 1 else 0
-            if top_r > 0.18 and (top_r - second_r) > 0.02:
+            gap = top_r - second_r
+            if top_r >= SBD_MADE_TOP_MIN and gap >= SBD_MADE_GAP_MIN:
+                digits.append(top_d)
+            elif top_r >= SBD_MADE_FALLBACK_TOP_MIN and gap >= SBD_MADE_FALLBACK_GAP_MIN:
                 digits.append(top_d)
             else:
                 digits.append(-1)
@@ -2103,7 +2444,7 @@ def _parse_p3_string(s, num_cols=4):
     return is_neg, comma_col, digits
 
 
-def draw_results_part3(image, results, student_details):
+def draw_results_part3(image, results, student_details, y_offset=0):
     """Vẽ kết quả Part III: khoanh đỏ bubble sai, xanh bubble đúng."""
     for q, res in results.items():
         blk = PART3_BLOCKS[q - 1]
@@ -2112,51 +2453,79 @@ def draw_results_part3(image, results, student_details):
         mark_color = COLOR_CORRECT if is_correct else COLOR_WRONG
 
         # --- Khoanh bubble học sinh đã tô ---
-        # Sign
-        sign_r = q_det.get("sign", 0)
-        if sign_r > FILL_THRESHOLD:
-            cv2.circle(image, (int(blk["sign_x"]), PART3_SIGN_Y),
-                       BUBBLE_RADIUS + 3, mark_color, THICKNESS_MARK)
-        # Comma
-        for ci, r in enumerate(q_det.get("comma", [])):
-            if r > FILL_THRESHOLD and ci < len(blk["cols_x"]):
-                cx = int(blk["cols_x"][ci])
-                cv2.circle(image, (cx, PART3_COMMA_Y),
+        picked = q_det.get("picked")
+        if picked:
+            if picked.get("sign"):
+                cv2.circle(image, (int(blk["sign_x"]), PART3_SIGN_Y + y_offset),
                            BUBBLE_RADIUS + 3, mark_color, THICKNESS_MARK)
-        # Digits
-        for ci, col_ratios in enumerate(q_det.get("digits", [])):
-            if ci >= len(blk["cols_x"]):
-                continue
-            cx = int(blk["cols_x"][ci])
-            for d, r in col_ratios.items():
-                if r > FILL_THRESHOLD:
-                    cy = int(PART3_DIGIT_START_Y + int(d) * PART3_DIGIT_STEP_Y)
+            comma_col = picked.get("comma_col", -1)
+            if 0 <= comma_col < len(blk["cols_x"]):
+                cx = int(blk["cols_x"][comma_col])
+                cv2.circle(image, (cx, PART3_COMMA_Y + y_offset),
+                           BUBBLE_RADIUS + 3, mark_color, THICKNESS_MARK)
+            for ci, d in enumerate(picked.get("digits", [])):
+                if 0 <= d <= 9 and ci < len(blk["cols_x"]):
+                    cx = int(blk["cols_x"][ci])
+                    cy = int(PART3_DIGIT_START_Y + d * PART3_DIGIT_STEP_Y + y_offset)
                     cv2.circle(image, (cx, cy),
                                BUBBLE_RADIUS + 3, mark_color, THICKNESS_MARK)
+
+        # OCR boxes (handwriting) if present
+        ocr_boxes = q_det.get("ocr_boxes", [])
+        ocr_digits = q_det.get("ocr_digits", [])
+        for i, box in enumerate(ocr_boxes):
+            if box is None or i >= len(ocr_digits):
+                continue
+            if ocr_digits[i] < 0:
+                continue
+            x1, y1, x2, y2 = box
+            cv2.rectangle(image, (x1, y1), (x2, y2), (255, 120, 0), 2)
+        else:
+            # Sign
+            sign_r = q_det.get("sign", 0)
+            if sign_r > FILL_THRESHOLD:
+                cv2.circle(image, (int(blk["sign_x"]), PART3_SIGN_Y + y_offset),
+                           BUBBLE_RADIUS + 3, mark_color, THICKNESS_MARK)
+            # Comma
+            for ci, r in enumerate(q_det.get("comma", [])):
+                if r > FILL_THRESHOLD and ci < len(blk["cols_x"]):
+                    cx = int(blk["cols_x"][ci])
+                    cv2.circle(image, (cx, PART3_COMMA_Y + y_offset),
+                               BUBBLE_RADIUS + 3, mark_color, THICKNESS_MARK)
+            # Digits
+            for ci, col_ratios in enumerate(q_det.get("digits", [])):
+                if ci >= len(blk["cols_x"]):
+                    continue
+                cx = int(blk["cols_x"][ci])
+                for d, r in col_ratios.items():
+                    if r > FILL_THRESHOLD:
+                        cy = int(PART3_DIGIT_START_Y + int(d) * PART3_DIGIT_STEP_Y + y_offset)
+                        cv2.circle(image, (cx, cy),
+                                   BUBBLE_RADIUS + 3, mark_color, THICKNESS_MARK)
 
         # --- Nếu sai: khoanh XANH đáp án đúng ---
         if not is_correct and res["correct"]:
             c_neg, c_comma, c_digits = _parse_p3_string(res["correct"])
             # Sign đúng
             if c_neg:
-                cv2.circle(image, (int(blk["sign_x"]), PART3_SIGN_Y),
+                cv2.circle(image, (int(blk["sign_x"]), PART3_SIGN_Y + y_offset),
                            BUBBLE_RADIUS + 5, COLOR_RIGHT_ANS, THICKNESS_MARK)
             # Comma đúng
             if 0 <= c_comma < len(blk["cols_x"]):
                 cx = int(blk["cols_x"][c_comma])
-                cv2.circle(image, (cx, PART3_COMMA_Y),
+                cv2.circle(image, (cx, PART3_COMMA_Y + y_offset),
                            BUBBLE_RADIUS + 5, COLOR_RIGHT_ANS, THICKNESS_MARK)
             # Digits đúng
             for ci, d in enumerate(c_digits):
                 if 0 <= d <= 9 and ci < len(blk["cols_x"]):
                     cx = int(blk["cols_x"][ci])
-                    cy = int(PART3_DIGIT_START_Y + d * PART3_DIGIT_STEP_Y)
+                    cy = int(PART3_DIGIT_START_Y + d * PART3_DIGIT_STEP_Y + y_offset)
                     cv2.circle(image, (cx, cy),
                                BUBBLE_RADIUS + 5, COLOR_RIGHT_ANS, THICKNESS_MARK)
 
         # --- Text đáp án ---
         first_cx = blk["cols_x"][0]
-        text_y = PART3_SIGN_Y - 25
+        text_y = PART3_SIGN_Y - 25 + y_offset
         cv2.putText(image, f"={res['student']}",
                     (int(first_cx - 10), int(text_y)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, mark_color, 2)
@@ -2355,6 +2724,11 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     else:
         print("[OK] Marker offsets: 0 (ảnh thẳng)")
 
+    p3_offset = detect_part3_offset_from_digits(gray)
+    if p3_offset is not None:
+        offsets["part3"] = p3_offset
+        print(f"[OK] Part3 offset (digits): {p3_offset:+d}px")
+
     # --- Bước 4-5: Đọc đáp án (dùng ảnh GRAYSCALE, không binary) ---
     sbd, made, sbd_det = extract_sbd_made(gray)
     p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
@@ -2409,7 +2783,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         if "part3" in correct_answers:
             s, r = grade_part3(p3_ans, correct_answers["part3"])
             scores["part3"] = s
-            draw_results_part3(result_mask, r, p3_det)
+            draw_results_part3(result_mask, r, p3_det, y_offset=offsets["part3"])
             print(f"  Phần III: {s}/6")
 
         total_score = sum(scores.values())

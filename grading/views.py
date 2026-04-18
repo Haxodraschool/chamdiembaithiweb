@@ -14,6 +14,8 @@ import os
 import re
 import tempfile
 import base64
+import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -1381,25 +1383,61 @@ def grade_frame_api(request):
             except Exception:
                 pass
 
-        # Chấm
-        result = grade_image(tmp_path, answer_key_str=answer_key_str,
-                             template_code=template_code, corners=corners_list)
+        # Chấm — rotate-retry: thử 0°, 90°, 180°, 270° nếu detect fail
+        # Giải quyết camera landscape / sai hướng mà không cần DL
+        rotations = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
+        rotation_names = ['0°', '90°', '180°', '270°']
+        best_result = None
 
-        if result.get('success'):
+        for rot, rot_name in zip(rotations, rotation_names):
+            if rot is not None:
+                # Tạo file tạm xoay
+                img = cv2.imread(tmp_path)
+                if img is None:
+                    break
+                rotated = cv2.rotate(img, rot)
+                rot_tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                cv2.imwrite(rot_tmp.name, rotated)
+                rot_tmp.close()
+                grade_path = rot_tmp.name
+            else:
+                grade_path = tmp_path
+
+            try:
+                result = grade_image(grade_path, answer_key_str=answer_key_str,
+                                     template_code=template_code,
+                                     corners=corners_list if rot is None else None)
+            except Exception:
+                result = {'success': False}
+            finally:
+                # Xóa file tạm xoay
+                if rot is not None and os.path.exists(grade_path):
+                    try:
+                        os.unlink(grade_path)
+                    except Exception:
+                        pass
+
+            if result.get('success'):
+                logger.info(f"grade_frame_api: success at rotation {rot_name}")
+                result['detect_method'] = result.get('detect_method', '') + f' (rot={rot_name})'
+                best_result = result
+                break  # Thành công → dùng ngay
+
+        if best_result and best_result.get('success'):
             return JsonResponse({
                 'success': True,
-                'sbd': result.get('sbd', ''),
-                'made': result.get('made', ''),
-                'score': result.get('score'),
-                'max_score': result.get('max_score'),
-                'scores': result.get('scores', {}),
-                'part1': {str(k): v for k, v in result.get('part1', {}).items()},
-                'detect_method': result.get('detect_method', ''),
+                'sbd': best_result.get('sbd', ''),
+                'made': best_result.get('made', ''),
+                'score': best_result.get('score'),
+                'max_score': best_result.get('max_score'),
+                'scores': best_result.get('scores', {}),
+                'part1': {str(k): v for k, v in best_result.get('part1', {}).items()},
+                'detect_method': best_result.get('detect_method', ''),
             })
         else:
             return JsonResponse({
                 'success': False,
-                'error': result.get('error', 'Không nhận diện được phiếu'),
+                'error': (best_result or {}).get('error', 'Không nhận diện được phiếu (đã thử xoay 0°/90°/180°/270°)'),
             })
     except Exception as e:
         logger.error(f"grade_frame_api error: {e}", exc_info=True)
