@@ -41,7 +41,6 @@ desktop.ini
 
 # OMR artifacts
 grading/engine/bubble_dataset/
-grading/engine/bubble_cnn.pth
 cnn_test_log.txt
 results.txt
 tmp/
