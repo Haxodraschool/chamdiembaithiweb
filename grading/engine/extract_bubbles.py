@@ -33,6 +33,10 @@ from PIL import Image, ExifTags
 CROP_SIZE = 32
 DATASET_DIR = os.path.join(os.path.dirname(__file__), 'bubble_dataset')
 
+# Ambiguous ratio zone — bubbles in this range go to 'unknow' for manual review
+AMBIGUOUS_LOW = 0.12
+AMBIGUOUS_HIGH = 0.45
+
 
 def load_and_warp(image_path):
     """Load image, fix EXIF, detect corners, warp to standard size."""
@@ -88,6 +92,7 @@ def extract_from_image(gray_img, image_name):
     """Extract bubbles, label using engine detection results."""
     os.makedirs(os.path.join(DATASET_DIR, 'filled'), exist_ok=True)
     os.makedirs(os.path.join(DATASET_DIR, 'empty'), exist_ok=True)
+    os.makedirs(os.path.join(DATASET_DIR, 'unknow'), exist_ok=True)
 
     offsets = detect_section_offsets(gray_img)
 
@@ -98,6 +103,7 @@ def extract_from_image(gray_img, image_name):
 
     filled_count = 0
     empty_count = 0
+    unknow_count = 0
 
     for cfg in PART1_COLS:
         sx, sy = cfg["start_x"], cfg["start_y"]
@@ -119,14 +125,19 @@ def extract_from_image(gray_img, image_name):
 
                 # Label: filled if this choice IS the detected answer
                 is_filled = (choice == answer) or (answer == 'X' and ratio > 0.25)
-                label = 'filled' if is_filled else 'empty'
                 fname = f"{image_name}_q{q}_{choice}_r{ratio:.3f}.png"
-                cv2.imwrite(os.path.join(DATASET_DIR, label, fname), crop)
 
-                if is_filled:
+                # Ambiguous? → unknow folder for manual review
+                if AMBIGUOUS_LOW <= ratio <= AMBIGUOUS_HIGH and not is_filled:
+                    label = 'unknow'
+                    unknow_count += 1
+                elif is_filled:
+                    label = 'filled'
                     filled_count += 1
                 else:
+                    label = 'empty'
                     empty_count += 1
+                cv2.imwrite(os.path.join(DATASET_DIR, label, fname), crop)
 
     # Part II (Đúng/Sai)
     for blk in PART2_BLOCKS:
@@ -148,18 +159,22 @@ def extract_from_image(gray_img, image_name):
                     continue
 
                 is_filled = (engine_ans == col_label)
-                label = 'filled' if is_filled else 'empty'
                 fname = f"{image_name}_p2_q{q}_{row_label}_{col_label}_r{ratio:.3f}.png"
-                cv2.imwrite(os.path.join(DATASET_DIR, label, fname), crop)
 
-                if is_filled:
+                if AMBIGUOUS_LOW <= ratio <= AMBIGUOUS_HIGH and not is_filled:
+                    label = 'unknow'
+                    unknow_count += 1
+                elif is_filled:
+                    label = 'filled'
                     filled_count += 1
                 else:
+                    label = 'empty'
                     empty_count += 1
+                cv2.imwrite(os.path.join(DATASET_DIR, label, fname), crop)
 
     # SBD + Mã đề (digits)
     def _extract_digits(digit_str, cols_x, prefix):
-        nonlocal filled_count, empty_count
+        nonlocal filled_count, empty_count, unknow_count
         for col_idx, cx in enumerate(cols_x):
             digit_ch = digit_str[col_idx] if col_idx < len(digit_str) else "?"
             if digit_ch == "?":
@@ -172,19 +187,23 @@ def extract_from_image(gray_img, image_name):
                     continue
 
                 is_filled = (d == target_digit)
-                label = 'filled' if is_filled else 'empty'
                 fname = f"{image_name}_{prefix}_c{col_idx}_d{d}_r{ratio:.3f}.png"
-                cv2.imwrite(os.path.join(DATASET_DIR, label, fname), crop)
 
-                if is_filled:
+                if AMBIGUOUS_LOW <= ratio <= AMBIGUOUS_HIGH and not is_filled:
+                    label = 'unknow'
+                    unknow_count += 1
+                elif is_filled:
+                    label = 'filled'
                     filled_count += 1
                 else:
+                    label = 'empty'
                     empty_count += 1
+                cv2.imwrite(os.path.join(DATASET_DIR, label, fname), crop)
 
     _extract_digits(sbd_str, SBD_COLS_X, "sbd")
     _extract_digits(made_str, MADE_COLS_X, "made")
 
-    return filled_count, empty_count
+    return filled_count, empty_count, unknow_count
 
 
 def main():
@@ -200,13 +219,13 @@ def main():
         sys.exit(1)
 
     # Clear old dataset
-    for sub in ['filled', 'empty']:
+    for sub in ['filled', 'empty', 'unknow']:
         d = os.path.join(DATASET_DIR, sub)
         if os.path.exists(d):
             for f in os.listdir(d):
                 os.remove(os.path.join(d, f))
 
-    total_f, total_e = 0, 0
+    total_f, total_e, total_u = 0, 0, 0
     for i, path in enumerate(paths, 1):
         print(f"[{i}/{len(paths)}] {os.path.basename(path)} ... ", end='', flush=True)
         _, gray = load_and_warp(path)
@@ -214,12 +233,13 @@ def main():
             print("FAILED")
             continue
         name = os.path.splitext(os.path.basename(path))[0]
-        f, e = extract_from_image(gray, name)
+        f, e, u = extract_from_image(gray, name)
         total_f += f
         total_e += e
-        print(f"filled={f}, empty={e}")
+        total_u += u
+        print(f"filled={f}, empty={e}, unknow={u}")
 
-    print(f"\nTOTAL: filled={total_f}, empty={total_e}")
+    print(f"\nTOTAL: filled={total_f}, empty={total_e}, unknow={total_u}")
     print(f"Dataset: {DATASET_DIR}")
 
 

@@ -719,14 +719,36 @@ def auto_deskew_and_crop(image, debug=False):
             warped_a = _warp_to_rect(image, ordered)
             score_a, sharp_a, refined_a = _score_warp_quality(
                 warped_a, "corner_markers", ordered)
+            method_a = "corner_markers"
+            corners_a = ordered
             if refined_a is not None:
-                warped_a = _warp_to_rect(warped_a, refined_a)
-                candidates.append((score_a, sharp_a, warped_a, ordered,
-                                   "corner_markers+refine"))
+                # ── FIX: single-warp thay vì double-warp ──
+                refined_orig = _map_warped_to_original(refined_a, ordered)
+                if _validate_marker_quad(refined_orig, image.shape[1], image.shape[0]):
+                    warped_a_ref = _warp_to_rect(image, refined_orig)
+                    score_a_ref, sharp_a_ref, _ = _score_warp_quality(
+                        warped_a_ref, "corner_markers+refine", refined_orig)
+                    # [FIX] Chỉ dùng refinement nếu score KHÔNG kém hơn
+                    if score_a_ref >= score_a:
+                        warped_a = warped_a_ref
+                        score_a = score_a_ref
+                        sharp_a = sharp_a_ref
+                        method_a = "corner_markers+refine"
+                        corners_a = refined_orig
+            # [FIX] Bonus ĐIỀU KIỆN theo symmetry — tránh false positive.
+            # Quad đối xứng cao (> 0.97) = detect đúng → +5 bonus
+            # Thấp hơn → bonus giảm hoặc không có
+            sym_a = _quad_symmetry(corners_a)
+            if sym_a > 0.97:
+                score_a += 5.0
+                bonus_note = f"+5 direct, sym={sym_a:.3f}"
+            elif sym_a > 0.94:
+                score_a += 2.0
+                bonus_note = f"+2 direct, sym={sym_a:.3f}"
             else:
-                candidates.append((score_a, sharp_a, warped_a, ordered,
-                                   "corner_markers"))
-            print(f"  [A] corner_markers → {score_a:.1f}")
+                bonus_note = f"no bonus, sym={sym_a:.3f} (suspicious)"
+            candidates.append((score_a, sharp_a, warped_a, corners_a, method_a))
+            print(f"  [A] {method_a} → {score_a:.1f} ({bonus_note})")
 
     # ─── Method B: Paper contour ───
     paper = _find_paper_contour(image, debug_img)
@@ -735,12 +757,23 @@ def auto_deskew_and_crop(image, debug=False):
         warped_b = _warp_to_rect(image, ordered_p)
         score_b, sharp_b, refined_b = _score_warp_quality(
             warped_b, "paper_contour", ordered_p)
+        method_b = "paper_contour"
+        corners_b = ordered_p
         if refined_b is not None:
-            warped_b = _warp_to_rect(warped_b, refined_b)
-            method_b = "paper+refine"
-        else:
-            method_b = "paper_contour"
-        candidates.append((score_b, sharp_b, warped_b, ordered_p, method_b))
+            # ── FIX: single-warp thay vì double-warp ──
+            refined_orig_b = _map_warped_to_original(refined_b, ordered_p)
+            if _validate_marker_quad(refined_orig_b, image.shape[1], image.shape[0]):
+                warped_b_ref = _warp_to_rect(image, refined_orig_b)
+                score_b_ref, sharp_b_ref, _ = _score_warp_quality(
+                    warped_b_ref, "paper+refine", refined_orig_b)
+                # [FIX] Chỉ dùng refinement nếu score KHÔNG kém hơn
+                if score_b_ref >= score_b:
+                    warped_b = warped_b_ref
+                    score_b = score_b_ref
+                    sharp_b = sharp_b_ref
+                    method_b = "paper+refine"
+                    corners_b = refined_orig_b
+        candidates.append((score_b, sharp_b, warped_b, corners_b, method_b))
         print(f"  [B] {method_b} → {score_b:.1f}")
 
     # ─── Method C: HYBRID paper + corner markers (DIRECT) ───
@@ -811,12 +844,19 @@ def auto_deskew_and_crop(image, debug=False):
                 # Score (KHÔNG refine thêm — đã chính xác pixel-level)
                 score_c, sharp_c, _ = _score_warp_quality(
                     warped_c, "paper+markers", markers_orig)
-                # Bonus +5 vì cross-validate
-                score_c += 5.0
+                # [FIX] Bonus điều kiện theo symmetry
+                sym_c = _quad_symmetry(markers_orig)
+                if sym_c > 0.97:
+                    score_c += 5.0
+                    bonus_c = f"+5 cross-validate, sym={sym_c:.3f}"
+                elif sym_c > 0.94:
+                    score_c += 2.0
+                    bonus_c = f"+2 cross-validate, sym={sym_c:.3f}"
+                else:
+                    bonus_c = f"no bonus, sym={sym_c:.3f} (suspicious)"
                 candidates.append((score_c, sharp_c, warped_c, markers_orig,
                                    "paper+markers"))
-                print(f"  [C] paper+markers → {score_c:.1f} "
-                      f"(direct marker search, +5 cross-validate)")
+                print(f"  [C] paper+markers → {score_c:.1f} ({bonus_c})")
             else:
                 print(f"  [C] paper+markers: quad invalid → skip")
         else:
@@ -829,17 +869,20 @@ def auto_deskew_and_crop(image, debug=False):
     # Sort by score desc
     candidates.sort(key=lambda x: x[0], reverse=True)
 
-    # Tie-breaker: nếu chênh < 5 điểm → ưu tiên sharpness cao hơn
-    # NGOẠI TRỪ: nếu top là hybrid (paper+markers) → giữ nguyên vì double-warp
-    #            giảm sharpness nhưng tọa độ chính xác hơn
+    # [FIX] Tie-breaker dựa trên SYMMETRY thay vì sharpness.
+    # Sharpness đã được tính 40% trong score rồi — không cần đếm 2 lần.
+    # Symmetry cao hơn = quad chuẩn hơn = warp ít skew hơn.
     if len(candidates) > 1:
         top = candidates[0]
         runner = candidates[1]
-        top_is_hybrid = "paper+markers" in top[4]
-        if abs(top[0] - runner[0]) < 5.0 and runner[1] > top[1] and not top_is_hybrid:
-            print(f"  [TIE-BREAK] scores within 5pts, "
-                  f"picking {runner[4]} (sharper: {runner[1]:.1f} > {top[1]:.1f})")
-            candidates[0], candidates[1] = candidates[1], candidates[0]
+        if abs(top[0] - runner[0]) < 2.0:
+            sym_top = _quad_symmetry(top[3])
+            sym_runner = _quad_symmetry(runner[3])
+            if sym_runner > sym_top + 0.01:
+                print(f"  [TIE-BREAK] scores within 2pts, "
+                      f"picking {runner[4]} (more symmetric: "
+                      f"{sym_runner:.3f} > {sym_top:.3f})")
+                candidates[0], candidates[1] = candidates[1], candidates[0]
 
     best_score, best_sharp, best_warped, best_corners, best_method = candidates[0]
 
@@ -1370,9 +1413,18 @@ def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
                 dist = np.sqrt((mcx - corner_x_in_roi)**2 + 
                                (mcy - corner_y_in_roi)**2)
                 
-                # Proximity bonus: gần góc → score cao hơn
-                # Marker thực tế cách mép giấy 10-40px
-                proximity = max(0.1, 1.0 - dist / 120.0)
+                # [FIX] Proximity bonus — marker thật nằm CÁCH mép giấy 20-60px,
+                # KHÔNG phải sát mép. Feature sát mép (dist<10px) thường là
+                # shadow/nếp gấp/chữ in — phải bị phạt, không thưởng.
+                #   dist < 10px  : nhiễu mép giấy → phạt mạnh (0.3)
+                #   10-70px      : vùng marker hợp lý → bonus 1.0
+                #   > 70px       : quá xa → giảm dần
+                if dist < 10:
+                    proximity = 0.3
+                elif dist <= 70:
+                    proximity = 1.0
+                else:
+                    proximity = max(0.2, 1.0 - (dist - 70) / 100.0)
                 
                 score = area * squareness * fill * proximity
                 if score > best_score:
@@ -1499,6 +1551,44 @@ def _warp_to_rect(image, corners):
     ], dtype="float32")
     M = cv2.getPerspectiveTransform(corners, dst)
     return cv2.warpPerspective(image, M, (WARP_WIDTH, WARP_HEIGHT))
+
+
+def _quad_symmetry(corners):
+    """
+    Đo độ đối xứng của quad 4 góc [TL, TR, BR, BL] (ordered).
+    Returns giá trị 0-1, với 1 = hoàn hảo (hình chữ nhật đều).
+    Dùng để phát hiện false positive (quad bất đối xứng → detect sai).
+    """
+    tl, tr, br, bl = corners
+    w_top = np.linalg.norm(tr - tl)
+    w_bot = np.linalg.norm(br - bl)
+    h_left = np.linalg.norm(bl - tl)
+    h_right = np.linalg.norm(br - tr)
+    if min(w_top, w_bot, h_left, h_right) <= 0:
+        return 0.0
+    w_sym = min(w_top, w_bot) / max(w_top, w_bot)
+    h_sym = min(h_left, h_right) / max(h_left, h_right)
+    return float((w_sym + h_sym) / 2.0)
+
+
+def _map_warped_to_original(refined_pts, original_corners):
+    """
+    Map tọa độ từ warped space (1400×1920) ngược về ảnh gốc.
+
+    Dùng nghịch đảo ma trận perspective để tránh double-warp.
+    refined_pts:      4 điểm ordered trong warped space
+    original_corners: 4 góc ordered dùng cho warp ban đầu
+    Returns: 4 điểm tương ứng trên ảnh gốc (float32, ordered)
+    """
+    dst = np.array([
+        [0, 0], [WARP_WIDTH - 1, 0],
+        [WARP_WIDTH - 1, WARP_HEIGHT - 1], [0, WARP_HEIGHT - 1]
+    ], dtype="float32")
+    M = cv2.getPerspectiveTransform(original_corners, dst)
+    M_inv = np.linalg.inv(M)
+    pts = refined_pts.reshape(-1, 1, 2).astype("float64")
+    mapped = cv2.perspectiveTransform(pts, M_inv)
+    return order_points(mapped.reshape(-1, 2).astype("float32"))
 
 
 # Alias cho code cũ — detect_paper_and_warp gọi auto_deskew_and_crop
