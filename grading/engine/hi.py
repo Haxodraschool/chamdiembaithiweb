@@ -101,10 +101,10 @@ _CNN_ERROR = None
 # step_x: khoảng cách ngang giữa A→B→C→D (~73px)
 # step_y: khoảng cách dọc giữa các câu (~33px)
 PART1_COLS = [
-    {"start_x": 88,   "start_y": 694, "step_x": 72.3, "step_y": 33.1, "q_start": 1},   # Cột 1: Q1-Q10
-    {"start_x": 436,  "start_y": 696, "step_x": 74,   "step_y": 33.1, "q_start": 11},  # Cột 2: Q11-Q20
-    {"start_x": 787,  "start_y": 696, "step_x": 73,   "step_y": 33.1, "q_start": 21},  # Cột 3: Q21-Q30
-    {"start_x": 1136, "start_y": 696, "step_x": 73,   "step_y": 33.1, "q_start": 31},  # Cột 4: Q31-Q40
+    {"start_x": 86,   "start_y": 692, "step_x": 72.3, "step_y": 33.1, "q_start": 1},   # Cột 1: Q1-Q10
+    {"start_x": 434,  "start_y": 694, "step_x": 74,   "step_y": 33.1, "q_start": 11},  # Cột 2: Q11-Q20
+    {"start_x": 785,  "start_y": 694, "step_x": 73,   "step_y": 33.1, "q_start": 21},  # Cột 3: Q21-Q30
+    {"start_x": 1134, "start_y": 694, "step_x": 73,   "step_y": 33.1, "q_start": 31},  # Cột 4: Q31-Q40
 ]
 PART1_NUM_ROWS = 10
 PART1_CHOICES = ["A", "B", "C", "D"]
@@ -114,14 +114,14 @@ PART1_CHOICES = ["A", "B", "C", "D"]
 # ╚════════════════════════════════════════════════════════════════════════╝
 # Mỗi block: start_x = tâm cột Đúng, start_x + step = tâm cột Sai
 PART2_BLOCKS = [
-    {"start_x": 87,   "start_y": 1192, "q": 1},
-    {"start_x": 234,  "start_y": 1192, "q": 2},
-    {"start_x": 436,  "start_y": 1192, "q": 3},
-    {"start_x": 583,  "start_y": 1192, "q": 4},
-    {"start_x": 787,  "start_y": 1192, "q": 5},
-    {"start_x": 933,  "start_y": 1192, "q": 6},
-    {"start_x": 1136, "start_y": 1192, "q": 7},
-    {"start_x": 1282, "start_y": 1192, "q": 8},
+    {"start_x": 85,   "start_y": 1190, "q": 1},
+    {"start_x": 232,  "start_y": 1190, "q": 2},
+    {"start_x": 434,  "start_y": 1190, "q": 3},
+    {"start_x": 581,  "start_y": 1190, "q": 4},
+    {"start_x": 785,  "start_y": 1190, "q": 5},
+    {"start_x": 931,  "start_y": 1190, "q": 6},
+    {"start_x": 1134, "start_y": 1190, "q": 7},
+    {"start_x": 1280, "start_y": 1190, "q": 8},
 ]
 PART2_STEP_X = 73   # Khoảng cách Đúng → Sai
 PART2_STEP_Y = 33   # Khoảng cách a → b → c → d
@@ -1963,12 +1963,19 @@ def _predict_bubble_cnn(gray_img, cx, cy):
         return float(probs[0, 1].item())
 
 
+HYBRID_ALWAYS_CNN = True   # Always run CNN on every bubble (not just ambiguous zone)
+
 def _hybrid_score(gray_img, cx, cy, threshold=FILL_THRESHOLD, force_cnn=False):
-    """Return (score, ratio, cnn_conf) using OpenCV + CNN when needed."""
+    """Return (score, ratio, cnn_conf) using OpenCV + CNN.
+    When HYBRID_ALWAYS_CNN=True, CNN runs on ALL bubbles and final score = max(ratio, cnn).
+    """
     _, ratio = is_bubble_filled(gray_img, cx, cy, threshold=threshold)
     cnn_conf = None
 
-    if HYBRID_CNN_ENABLE and (force_cnn or (HYBRID_RATIO_LOW <= ratio <= HYBRID_RATIO_HIGH)):
+    use_cnn = HYBRID_CNN_ENABLE and (
+        HYBRID_ALWAYS_CNN or force_cnn or (HYBRID_RATIO_LOW <= ratio <= HYBRID_RATIO_HIGH)
+    )
+    if use_cnn:
         cnn_conf = _predict_bubble_cnn(gray_img, cx, cy)
 
     if cnn_conf is None:
