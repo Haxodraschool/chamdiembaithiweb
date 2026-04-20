@@ -186,13 +186,13 @@
                         <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         <circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="2"/>
                     </svg>
-                    Chụp phiếu đáp án
+                    Chọn ảnh phiếu đáp án
                 </button>
                 <div class="body-sm" style="margin-top:var(--space-2); color:var(--on-surface-variant);">
-                    Mở camera để chụp trực tiếp phiếu đáp án đã tô
+                    Chọn ảnh phiếu đáp án đã tô từ thư viện hoặc chụp mới
                 </div>
                 <input type="file" x-ref="cameraInput" @change="handleCameraCapture($event)"
-                       accept="image/*" capture="environment" class="sr-only">
+                       accept="image/jpeg,image/png,image/webp,image/bmp" class="sr-only">
             </div>
 
             <!-- Camera Modal -->
@@ -585,28 +585,9 @@ function examImport() {
 
         // ── Camera methods ──
         openCamera() {
-            if (this.isMobile) {
-                this.$refs.cameraInput.click();
-                return;
-            }
-            this.cameraOpen = true;
-            this.capturedImage = null;
-            this.capturedBlob = null;
-            var self = this;
-            this.$nextTick(function() {
-                navigator.mediaDevices.getUserMedia({
-                    video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: 'environment' }
-                }).then(function(stream) {
-                    self.cameraStream = stream;
-                    if (self.$refs.cameraVideo) {
-                        self.$refs.cameraVideo.srcObject = stream;
-                    }
-                }).catch(function(err) {
-                    console.error('Camera error:', err);
-                    alert('Không thể truy cập camera. Hãy cấp quyền camera cho trình duyệt.');
-                    self.closeCamera();
-                });
-            });
+            // Both mobile and desktop: use native file picker / camera
+            // Desktop webcam quality is too low for document scanning
+            this.$refs.cameraInput.click();
         },
 
         closeCamera() {
