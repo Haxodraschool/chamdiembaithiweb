@@ -1953,17 +1953,24 @@ def _predict_bubble_cnn(gray_img, cx, cy):
     if crop is None:
         return None
 
-    import torch
-    img = crop.astype(np.float32) / 255.0
-    tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).to(_CNN_DEVICE)
+    try:
+        import torch
+        img = crop.astype(np.float32) / 255.0
+        # Ensure 2D grayscale input → (1, 1, H, W)
+        if img.ndim == 3:
+            img = img[:, :, 0]  # drop channels if accidentally color
+        tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).to(_CNN_DEVICE)
 
-    with torch.no_grad():
-        out = _CNN_MODEL(tensor)
-        probs = torch.softmax(out, dim=1)
-        return float(probs[0, 1].item())
+        with torch.no_grad():
+            out = _CNN_MODEL(tensor)
+            probs = torch.softmax(out, dim=1)
+            return float(probs[0, 1].item())
+    except Exception as e:
+        print(f"[CNN WARN] _predict_bubble_cnn failed: {e}")
+        return None
 
 
-HYBRID_ALWAYS_CNN = True   # Always run CNN on every bubble (not just ambiguous zone)
+HYBRID_ALWAYS_CNN = False   # Only run CNN on ambiguous bubbles (saves ~80% time)
 
 def _hybrid_score(gray_img, cx, cy, threshold=FILL_THRESHOLD, force_cnn=False):
     """Return (score, ratio, cnn_conf) using OpenCV + CNN.
