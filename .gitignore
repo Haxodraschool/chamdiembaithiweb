@@ -41,7 +41,55 @@ desktop.ini
 
 # OMR artifacts
 grading/engine/bubble_dataset/
+grading/engine/results/
 cnn_test_log.txt
 results.txt
 tmp/
 anh/
+
+# Test / debug files
+test_image_debug/
+test_scan_output/
+test_*.py
+test_*.txt
+find_cameras.py
+gen_calibration.py
+gen_all_calib.py
+batch_grade.py
+calibrate_part3.py
+diag.py
+diag_q25.py
+extract_best.py
+da35b902e16f6031397e.jpg
+
+# Debug images in cacmaubaithi
+cacmaubaithi/**/*_calibration.jpg
+cacmaubaithi/**/*_cleaned.jpg
+cacmaubaithi/**/*_detect.jpg
+cacmaubaithi/**/*_gray.jpg
+cacmaubaithi/**/*_name.jpg
+cacmaubaithi/**/*_overlay.jpg
+cacmaubaithi/**/*_result.jpg
+cacmaubaithi/**/*_thresh.jpg
+
+# Calibration images in static
+static/*_calibration.jpg
+static/temp_calibration.jpg
+
+# Flutter build artifacts
+gradeflow_app/build/
+gradeflow_app/.dart_tool/
+gradeflow_app/.flutter-plugins
+gradeflow_app/.flutter-plugins-dependencies
+gradeflow_app/android/.gradle/
+gradeflow_app/android/local.properties
+gradeflow_app/.packages
+
+# Flutter platforms not needed (keep android, ios, web, lib)
+gradeflow_app/linux/
+gradeflow_app/macos/
+gradeflow_app/windows/
+gradeflow_app/test/
+
+# Agent skills
+agent/

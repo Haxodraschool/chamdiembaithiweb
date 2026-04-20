@@ -29,6 +29,12 @@ PyJWT[crypto]==2.12.1           # JWT token cho Google OAuth (allauth dependency
 requests>=2.31                  # HTTP client (allauth Google provider dependency)
 
 # -----------------------------------------------------------------------------
+# REST API — Mobile app backend
+# -----------------------------------------------------------------------------
+djangorestframework==3.15.2     # REST API framework cho mobile app
+django-cors-headers==4.4.0      # Cho phép CORS từ mobile app
+
+# -----------------------------------------------------------------------------
 # FRONTEND TOOLS — Hỗ trợ giao diện
 # -----------------------------------------------------------------------------
 django-htmx==1.27.0             # HTMX middleware — AJAX không cần viết JS

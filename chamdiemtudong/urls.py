@@ -27,6 +27,7 @@ urlpatterns = [
     path('accounts/', include('accounts.urls')),     # Custom login/logout/profile (matched first)
     path('accounts/', include('allauth.socialaccount.providers.google.urls')),  # Google OAuth
     path('accounts/', include('allauth.urls')),     # allauth: social callbacks
+    path('api/', include('api.urls')),            # REST API for mobile app
     path('grading/', include('grading.urls')),
     path('', include('dashboard.urls')),  # Dashboard handles /dashboard/ prefix internally
     path('', RedirectView.as_view(url='/dashboard/', permanent=False)),

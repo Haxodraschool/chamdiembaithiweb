@@ -61,6 +61,9 @@ INSTALLED_APPS = [
     'django.contrib.sites',
 
     # Third-party
+    'rest_framework',
+    'rest_framework.authtoken',
+    'corsheaders',
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -85,6 +88,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'chamdiemtudong.middleware.DisableCSRFOriginCheckMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -243,6 +247,24 @@ CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
 # =============================================================================
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# =============================================================================
+# REST FRAMEWORK — Mobile API
+# =============================================================================
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+# CORS — cho phép mobile app gọi API
+# Mobile apps don't have an Origin header, so we allow all for API paths
+CORS_ALLOW_ALL_ORIGINS = True
 
 # Logging — show allauth errors in Railway logs
 LOGGING = {
