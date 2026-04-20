@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from sklearn.model_selection import train_test_split
+# sklearn lazy-imported in train() — not needed at import time for inference
 
 DATASET_DIR = os.path.join(os.path.dirname(__file__), 'bubble_dataset')
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'bubble_cnn.pth')
@@ -130,6 +130,7 @@ def train(epochs=20, lr=0.001, batch_size=32):
         sys.exit(1)
 
     # Split train/val (80/20)
+    from sklearn.model_selection import train_test_split
     X_train, X_val, y_train, y_val = train_test_split(
         images, labels, test_size=0.2, random_state=42, stratify=labels
     )
