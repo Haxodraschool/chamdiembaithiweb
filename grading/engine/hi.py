@@ -2939,6 +2939,9 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             cv2.imwrite(name_path, name_crop)
             print(f"[OK] Ảnh tên: {name_path}")
 
+    _load_bubble_cnn()
+    cnn_status = "ready" if _CNN_READY else f"error:{_CNN_ERROR}"
+
     return {
         "sbd": sbd, "made": made,
         "part1": p1_ans, "part2": p2_ans, "part3": p3_ans,
@@ -2949,6 +2952,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         "name_image_path": name_path,
         "detect_method": method if not pre_warped else "pre_warped",
         "offsets": offsets,
+        "cnn_status": cnn_status,
     }
 
 

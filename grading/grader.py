@@ -334,6 +334,7 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
     # Build detail JSON — engine returns "details" with sub-keys sbd/part1/part2/part3
     engine_details = result.get('details', {})
     detail = {
+        'cnn_status': result.get('cnn_status', 'unknown'),
         'sbd_detail': engine_details.get('sbd', {}),
         'part1_detail': engine_details.get('part1', {}),
         'part2_detail': engine_details.get('part2', {}),

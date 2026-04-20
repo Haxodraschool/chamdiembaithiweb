@@ -93,5 +93,4 @@ openpyxl>=3.1                   # Xuất kết quả Excel
 # -----------------------------------------------------------------------------
 # CNN BUBBLE CLASSIFIER — Phân loại bubble bằng deep learning
 # -----------------------------------------------------------------------------
---extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.0                      # PyTorch CPU-only — CNN bubble classifier (nhẹ ~150MB)
+# torch được cài riêng trong railway.json buildCommand (CPU-only ~150MB)

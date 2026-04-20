@@ -2,7 +2,7 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "pip install -r requirements.txt && python manage.py collectstatic --noinput"
+    "buildCommand": "pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -r requirements.txt && python manage.py collectstatic --noinput"
   },
   "deploy": {
     "startCommand": "python manage.py migrate --noinput && python manage.py ensure_superuser && python manage.py setup_google_oauth && python manage.py check_google_oauth && gunicorn chamdiemtudong.wsgi --bind 0.0.0.0:$PORT --workers 2 --timeout 120",
