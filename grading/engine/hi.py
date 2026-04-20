@@ -2164,12 +2164,12 @@ def extract_part1(cleaned_img, y_offset=0):
     """
     Đọc 40 câu trắc nghiệm ABCD.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
-    Chạy 3 engine (OpenCV / CNN / Hybrid), so điểm → lấy đáp án của engine thắng.
+    Dùng CNN-only để detect bubble.
     Trả về:
       answers: {1: 'A', 2: 'C', ...}  ('X'=tô nhiều, ''=không tô)
       details: {1: {'A': 0.05, 'B': 0.72, ...}, ...}  (fill ratio)
     """
-    ans_cv, ans_cnn, ans_hyb = {}, {}, {}
+    answers = {}
     details = {}
 
     for cfg in PART1_COLS:
@@ -2181,37 +2181,17 @@ def extract_part1(cleaned_img, y_offset=0):
         for row in range(col_rows):
             q = q_start + row
             cy = sy + row * dy + y_offset
-            ratios_cv = {}
             ratios_cnn = {}
-            ratios_hyb = {}
 
             for ci, choice in enumerate(PART1_CHOICES):
                 cx = sx + ci * dx
-                score, ratio, cnn_conf = _hybrid_score(cleaned_img, cx, cy)
-                ratios_cv[choice] = round(ratio, 3)
+                cnn_conf = _predict_bubble_cnn(cleaned_img, cx, cy)
                 ratios_cnn[choice] = round(cnn_conf, 3) if cnn_conf is not None else 0.0
-                ratios_hyb[choice] = round(score, 3)
 
-            details[q] = {
-                "ratio": ratios_cv,
-                "cnn": ratios_cnn,
-            }
-            ans_cv[q] = _pick_answer(_detect_filled_choices(ratios_cv))
-            ans_cnn[q] = _pick_answer(_detect_filled_choices(ratios_cnn))
-            ans_hyb[q] = _pick_answer(_detect_filled_choices(ratios_hyb))
+            details[q] = ratios_cnn
+            answers[q] = _pick_answer(_detect_filled_choices(ratios_cnn))
 
-    # --- Competition: pick engine with most detections ---
-    n_cv = _count_detected(ans_cv)
-    n_cnn = _count_detected(ans_cnn)
-    n_hyb = _count_detected(ans_hyb)
-
-    candidates = [("hybrid", n_hyb, ans_hyb), ("cv", n_cv, ans_cv), ("cnn", n_cnn, ans_cnn)]
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    winner_name, winner_n, winner_ans = candidates[0]
-
-    print(f"  [P1 competition] CV={n_cv} CNN={n_cnn} Hybrid={n_hyb} → winner={winner_name}({winner_n})")
-
-    return winner_ans, details
+    return answers, details
 
 
 # ╔════════════════════════════════════════════════════════════════════════╗
@@ -2222,57 +2202,36 @@ def extract_part2(cleaned_img, y_offset=0):
     """
     Đọc 8 câu Đúng/Sai cho mỗi ý a, b, c, d.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
-    Chạy 3 engine (OpenCV / CNN / Hybrid), so điểm → lấy đáp án của engine thắng.
+    Dùng CNN-only để detect bubble.
     Trả về:
       answers: {1: {'a': 'Dung', 'b': 'Sai', ...}, ...}
       details: {1: {'a': {'Dung': 0.7, 'Sai': 0.05}, ...}, ...}
     """
-    ans_cv, ans_cnn, ans_hyb = {}, {}, {}
+    answers = {}
     details = {}
 
     for blk in PART2_BLOCKS:
         q = blk["q"]
         sx, sy = blk["start_x"], blk["start_y"]
-        q_cv, q_cnn, q_hyb, q_det = {}, {}, {}, {}
+        q_ans, q_det = {}, {}
 
         for ri, label in enumerate(PART2_ROWS):
             cy = sy + ri * PART2_STEP_Y + y_offset
-            # Cột Đúng
-            score_dung, r_dung, cnn_dung = _hybrid_score(cleaned_img, sx, cy)
-            # Cột Sai
-            score_sai, r_sai, cnn_sai = _hybrid_score(cleaned_img, sx + PART2_STEP_X, cy)
+            # CNN-only: Đúng & Sai
+            c_dung = _predict_bubble_cnn(cleaned_img, sx, cy) or 0.0
+            c_sai = _predict_bubble_cnn(cleaned_img, sx + PART2_STEP_X, cy) or 0.0
 
-            r_dung = round(r_dung, 3)
-            r_sai = round(r_sai, 3)
-            c_dung = round(cnn_dung, 3) if cnn_dung is not None else 0.0
-            c_sai = round(cnn_sai, 3) if cnn_sai is not None else 0.0
-            q_det[label] = {"Dung": r_dung, "Sai": r_sai}
+            c_dung = round(c_dung, 3)
+            c_sai = round(c_sai, 3)
+            q_det[label] = {"Dung": c_dung, "Sai": c_sai}
 
-            cv_map = {"Dung": r_dung, "Sai": r_sai}
-            cnn_map = {"Dung": c_dung, "Sai": c_sai}
-            hyb_map = {"Dung": round(score_dung, 3), "Sai": round(score_sai, 3)}
+            filled = _detect_filled_choices({"Dung": c_dung, "Sai": c_sai})
+            q_ans[label] = _pick_answer(filled)
 
-            q_cv[label] = _pick_answer(_detect_filled_choices(cv_map))
-            q_cnn[label] = _pick_answer(_detect_filled_choices(cnn_map))
-            q_hyb[label] = _pick_answer(_detect_filled_choices(hyb_map))
-
-        ans_cv[q] = q_cv
-        ans_cnn[q] = q_cnn
-        ans_hyb[q] = q_hyb
+        answers[q] = q_ans
         details[q] = q_det
 
-    # --- Competition: pick engine with most detections ---
-    n_cv = _count_detected(ans_cv)
-    n_cnn = _count_detected(ans_cnn)
-    n_hyb = _count_detected(ans_hyb)
-
-    candidates = [("hybrid", n_hyb, ans_hyb), ("cv", n_cv, ans_cv), ("cnn", n_cnn, ans_cnn)]
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    winner_name, winner_n, winner_ans = candidates[0]
-
-    print(f"  [P2 competition] CV={n_cv} CNN={n_cnn} Hybrid={n_hyb} → winner={winner_name}({winner_n})")
-
-    return winner_ans, details
+    return answers, details
 
 
 # ╔════════════════════════════════════════════════════════════════════════╗
