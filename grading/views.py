@@ -821,13 +821,20 @@ def parse_image_api(request):
         from grading.engine import hi as engine
         result = engine.process_sheet(tmp_path, correct_answers=None, debug=False)
 
-        # Cleanup temp file
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        # Cleanup temp file + leaked result images
+        base_tmp = os.path.splitext(tmp_path)[0]
+        for suffix in ['', '_result.jpg', '_overlay.jpg', '_name.jpg',
+                        '_calibration.jpg', '_gray.jpg', '_thresh.jpg',
+                        '_cleaned.jpg', '_detect.jpg']:
+            try:
+                p = tmp_path if suffix == '' else f"{base_tmp}{suffix}"
+                if os.path.exists(p):
+                    os.unlink(p)
+            except OSError:
+                pass
 
         if not result:
+            logger.warning('parse_image_api: engine returned None (corner detection failed)')
             return JsonResponse({'error': 'Không thể đọc phiếu trả lời. Hãy chụp rõ hơn.'}, status=400)
 
         # Convert engine result → same format as parse_excel_api
@@ -836,11 +843,19 @@ def parse_image_api(request):
         p3_ans = result.get('part3', {})
         made = result.get('made', '')
 
+        # Total questions scanned by engine (e.g. 40, 8, 6)
+        total_p1 = len(p1_ans)
+        total_p2 = len(p2_ans)
+        total_p3 = len(p3_ans)
+
         # Count actual detected answers
         p1_count = sum(1 for v in p1_ans.values() if v and v not in ('', 'X'))
         p2_count = sum(1 for v in p2_ans.values()
                        if isinstance(v, dict) and any(v.get(k) for k in ('a', 'b', 'c', 'd')))
         p3_count = sum(1 for v in p3_ans.values() if v and str(v).strip())
+
+        logger.info(f'parse_image: detected P1={p1_count}/{total_p1} P2={p2_count}/{total_p2} '
+                     f'P3={p3_count}/{total_p3} cnn={result.get("cnn_status","?")}')
 
         # Build P1 dict (string keys, uppercase values)
         p1 = {}
@@ -882,16 +897,18 @@ def parse_image_api(request):
             'p3_count': len(p3),
         }
 
-        # Use the max part counts from the sheet layout (40, 8, 6)
+        # Use total questions from sheet layout (not just detected count)
         data = {
             'variants': [variant],
-            'part1Count': max(len(p1), p1_count),
-            'part2Count': max(len(p2), p2_count),
-            'part3Count': max(len(p3), p3_count),
-            'totalQuestions': max(len(p1), p1_count) + max(len(p2), p2_count) + max(len(p3), p3_count),
+            'part1Count': total_p1,
+            'part2Count': total_p2,
+            'part3Count': total_p3,
+            'totalQuestions': total_p1 + total_p2 + total_p3,
             'variantCount': 1,
             'source': 'image',
             'detect_method': result.get('detect_method', '?'),
+            'cnn_status': result.get('cnn_status', 'unknown'),
+            'detected': {'p1': p1_count, 'p2': p2_count, 'p3': p3_count},
         }
 
         return JsonResponse({'success': True, 'data': data})
