@@ -2164,7 +2164,7 @@ def extract_part1(cleaned_img, y_offset=0):
     """
     Đọc 40 câu trắc nghiệm ABCD.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
-    Dùng CNN-only để detect bubble.
+    Hybrid 1-pass: max(OpenCV, CNN) cho mỗi bubble.
     Trả về:
       answers: {1: 'A', 2: 'C', ...}  ('X'=tô nhiều, ''=không tô)
       details: {1: {'A': 0.05, 'B': 0.72, ...}, ...}  (fill ratio)
@@ -2181,15 +2181,15 @@ def extract_part1(cleaned_img, y_offset=0):
         for row in range(col_rows):
             q = q_start + row
             cy = sy + row * dy + y_offset
-            ratios_cnn = {}
+            ratios = {}
 
             for ci, choice in enumerate(PART1_CHOICES):
                 cx = sx + ci * dx
-                cnn_conf = _predict_bubble_cnn(cleaned_img, cx, cy)
-                ratios_cnn[choice] = round(cnn_conf, 3) if cnn_conf is not None else 0.0
+                score, ratio, cnn_conf = _hybrid_score(cleaned_img, cx, cy)
+                ratios[choice] = round(score, 3)
 
-            details[q] = ratios_cnn
-            answers[q] = _pick_answer(_detect_filled_choices(ratios_cnn))
+            details[q] = ratios
+            answers[q] = _pick_answer(_detect_filled_choices(ratios))
 
     return answers, details
 
@@ -2202,7 +2202,7 @@ def extract_part2(cleaned_img, y_offset=0):
     """
     Đọc 8 câu Đúng/Sai cho mỗi ý a, b, c, d.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
-    Dùng CNN-only để detect bubble.
+    Hybrid 1-pass: max(OpenCV, CNN) cho mỗi bubble.
     Trả về:
       answers: {1: {'a': 'Dung', 'b': 'Sai', ...}, ...}
       details: {1: {'a': {'Dung': 0.7, 'Sai': 0.05}, ...}, ...}
@@ -2217,15 +2217,14 @@ def extract_part2(cleaned_img, y_offset=0):
 
         for ri, label in enumerate(PART2_ROWS):
             cy = sy + ri * PART2_STEP_Y + y_offset
-            # CNN-only: Đúng & Sai
-            c_dung = _predict_bubble_cnn(cleaned_img, sx, cy) or 0.0
-            c_sai = _predict_bubble_cnn(cleaned_img, sx + PART2_STEP_X, cy) or 0.0
+            # Cột Đúng
+            score_dung, r_dung, _ = _hybrid_score(cleaned_img, sx, cy)
+            # Cột Sai
+            score_sai, r_sai, _ = _hybrid_score(cleaned_img, sx + PART2_STEP_X, cy)
 
-            c_dung = round(c_dung, 3)
-            c_sai = round(c_sai, 3)
-            q_det[label] = {"Dung": c_dung, "Sai": c_sai}
+            q_det[label] = {"Dung": round(score_dung, 3), "Sai": round(score_sai, 3)}
 
-            filled = _detect_filled_choices({"Dung": c_dung, "Sai": c_sai})
+            filled = _detect_filled_choices({"Dung": score_dung, "Sai": score_sai})
             q_ans[label] = _pick_answer(filled)
 
         answers[q] = q_ans
