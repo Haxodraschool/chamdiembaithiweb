@@ -146,6 +146,11 @@ class GradeResultScreen extends StatelessWidget {
         ),
         const SizedBox(height: 16),
 
+        // ── Name crop image (cropped from scanned sheet) ──
+        if (result.nameImageBase64.isNotEmpty)
+          _buildNameCrop(),
+        const SizedBox(height: 12),
+
         // ── Part Scores ──
         if (result.weighted != null) _buildPartScores(),
         const SizedBox(height: 16),
@@ -186,6 +191,34 @@ class GradeResultScreen extends StatelessWidget {
         ),
         const SizedBox(height: 32),
       ],
+    );
+  }
+
+  // ── Name Crop Image ──
+  Widget _buildNameCrop() {
+    final bytes = base64Decode(result.nameImageBase64);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Icon(LucideIcons.user, size: 16, color: GradeFlowTheme.primary),
+            const SizedBox(width: 8),
+            Text('Họ tên học sinh',
+                style: GoogleFonts.dmSans(
+                    fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.memory(bytes,
+                    height: 36, fit: BoxFit.contain,
+                    alignment: Alignment.centerLeft),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

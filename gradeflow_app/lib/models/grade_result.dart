@@ -19,6 +19,7 @@ class GradeResult {
   final String error;
   final String resultImageBase64;
   final String overlayImageBase64;
+  final String nameImageBase64;
 
   GradeResult({
     required this.success,
@@ -41,6 +42,7 @@ class GradeResult {
     this.error = '',
     this.resultImageBase64 = '',
     this.overlayImageBase64 = '',
+    this.nameImageBase64 = '',
   });
 
   factory GradeResult.fromJson(Map<String, dynamic> json) {
@@ -67,6 +69,7 @@ class GradeResult {
       error: json['error'] ?? '',
       resultImageBase64: json['result_image'] ?? '',
       overlayImageBase64: json['overlay_image'] ?? '',
+      nameImageBase64: json['name_image'] ?? '',
     );
   }
 }

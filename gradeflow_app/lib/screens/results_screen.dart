@@ -220,9 +220,11 @@ class _SubmissionCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      sub.studentId.isNotEmpty
-                          ? 'SBD ${sub.studentId}'
-                          : 'Bài #${sub.id}',
+                      sub.studentName.isNotEmpty
+                          ? sub.studentName
+                          : sub.studentId.isNotEmpty
+                              ? 'SBD ${sub.studentId}'
+                              : 'Bài #${sub.id}',
                       style: GoogleFonts.dmSans(
                           fontSize: 14, fontWeight: FontWeight.w600),
                     ),

@@ -200,7 +200,10 @@ def compute_weighted_score(result, scoring_config, correct_answers=None):
     if p2_mode == 'moet' and correct_answers and correct_answers.get('part2'):
         student_p2 = result.get('part2', {})
         p2_score, p2_detail = score_part2_moet(student_p2, correct_answers['part2'])
-        p2_correct_total = sum(d['correct_count'] for d in p2_detail.values())
+        # Đếm số câu P2 đúng hoàn toàn (4/4 sub-answers) — khớp với total_questions
+        p2_correct_total = sum(
+            1 for d in p2_detail.values() if d.get('correct_count', 0) >= 4
+        )
     elif scores.get('part2') is not None:
         p2_raw = scores.get('part2', 0) or 0
         p2_score = round(p2_raw * scoring_config.get('p2', 1.0), 2)
@@ -358,6 +361,7 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
         'part3': result.get('part3', {}),
         'detail_json': json.dumps(detail, ensure_ascii=False, default=str),
         'result_image_path': result_img if os.path.exists(result_img) else '',
+        'name_image_path': result.get('name_image_path', ''),
         'processing_time': processing_time,
         'detect_method': detect_method,
         'error': '',

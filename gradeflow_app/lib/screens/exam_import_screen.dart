@@ -42,7 +42,19 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
   DocumentScanner? _documentScanner;
 
   @override
+  void initState() {
+    super.initState();
+    _titleCtrl.addListener(_onTitleChanged);
+  }
+
+  void _onTitleChanged() {
+    // Rebuild so the confirm button enables/disables properly
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    _titleCtrl.removeListener(_onTitleChanged);
     _titleCtrl.dispose();
     _subjectCtrl.dispose();
     _documentScanner?.close();
@@ -343,7 +355,7 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
           child: ElevatedButton.icon(
             onPressed: _uploading ? null : _scanAnswerSheet,
             icon: const Icon(LucideIcons.scan, size: 20),
-            label: Text('Quét phiếu đáp án',
+            label: Text('Quét phiếu thi',
                 style: GoogleFonts.dmSans(
                     fontSize: 15, fontWeight: FontWeight.w600)),
             style: ElevatedButton.styleFrom(
@@ -356,7 +368,7 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
           ),
         ),
         const SizedBox(height: 8),
-        Text('Dùng camera quét phiếu đáp án đã tô (ML Kit)',
+        Text('Quét phiếu thi bằng camera hoặc chọn từ thư viện',
             textAlign: TextAlign.center,
             style: GoogleFonts.dmSans(
                 fontSize: 13, color: GradeFlowTheme.onSurfaceVariant)),

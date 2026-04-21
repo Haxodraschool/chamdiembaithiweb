@@ -249,9 +249,11 @@ class _SubmissionTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    data['student_id']?.isNotEmpty == true
-                        ? 'SBD ${data['student_id']}'
-                        : data['exam_title'] ?? 'Bài nộp',
+                    data['student_name']?.isNotEmpty == true
+                        ? data['student_name']
+                        : data['student_id']?.isNotEmpty == true
+                            ? 'SBD ${data['student_id']}'
+                            : data['exam_title'] ?? 'Bài nộp',
                     style: GoogleFonts.dmSans(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,

@@ -653,6 +653,16 @@ def grade_api(request):
             except Exception:
                 pass
 
+        # Encode name crop image
+        name_image_b64 = ''
+        name_img_path = result.get('name_image_path', '')
+        if name_img_path and os.path.exists(name_img_path):
+            try:
+                with open(name_img_path, 'rb') as f:
+                    name_image_b64 = base64.b64encode(f.read()).decode('utf-8')
+            except Exception:
+                pass
+
         # Build correct answers map for comparison
         correct_map = {}
         if correct_answers:
@@ -686,6 +696,7 @@ def grade_api(request):
             'processing_time': result.get('processing_time', 0),
             'result_image': result_image_b64,
             'overlay_image': overlay_image_b64,
+            'name_image': name_image_b64,
         })
 
     except Exception as e:

@@ -2465,12 +2465,12 @@ def grade_part3(student, correct):
 # ║                  VẼ KẾT QUẢ LÊN ẢNH (Visualization)                ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
-# Màu sắc (BGR)
-COLOR_CORRECT   = (0, 200, 0)     # Xanh lá  - đáp án HS đúng
-COLOR_WRONG     = (0, 0, 220)     # Đỏ       - đáp án HS sai
-COLOR_RIGHT_ANS = (0, 220, 0)     # Xanh lá đậm - đáp án đúng (khi HS sai)
-COLOR_UNANSWERED = (0, 220, 255)  # Vàng (BGR) - chưa khoanh / bỏ trống
-THICKNESS_MARK  = 3
+# Màu sắc (BGR) — đậm, nổi bật
+COLOR_CORRECT   = (0, 180, 0)     # Xanh lá đậm  - đáp án HS đúng
+COLOR_WRONG     = (0, 0, 220)     # Đỏ đậm       - đáp án HS sai
+COLOR_RIGHT_ANS = (0, 180, 0)     # Xanh lá đậm - đáp án đúng (khi HS sai)
+COLOR_UNANSWERED = (0, 200, 255)  # Vàng đậm - chưa khoanh / bỏ trống
+THICKNESS_MARK  = 5
 
 
 def draw_results_part1(image, results, y_offset=0):
