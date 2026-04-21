@@ -7,6 +7,7 @@ import '../config/theme.dart';
 import '../models/exam.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
+import '../services/coach_mark_service.dart';
 import 'scan_screen.dart';
 import 'results_screen.dart';
 import 'exam_create_screen.dart';
@@ -24,10 +25,41 @@ class _ExamsScreenState extends State<ExamsScreen> {
   bool _loading = true;
   String? _error;
 
+  final GlobalKey _importBtnKey = GlobalKey();
+  final GlobalKey _manualBtnKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
     _loadExams();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowCoachMarks());
+  }
+
+  Future<void> _maybeShowCoachMarks() async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    await CoachMarkService.show(
+      context: context,
+      screenKey: 'exams_screen',
+      targets: [
+        CoachMarkService.buildTarget(
+          identify: 'import',
+          key: _importBtnKey,
+          title: 'Tạo đề từ file',
+          description:
+              'Import nhanh từ file Excel (.xlsx) chứa đáp án, hoặc quét ảnh phiếu đáp án mẫu để tạo đề.',
+          align: ContentAlign.bottom,
+        ),
+        CoachMarkService.buildTarget(
+          identify: 'manual',
+          key: _manualBtnKey,
+          title: 'Tạo thủ công',
+          description:
+              'Tự nhập thông tin đề thi và đáp án theo 3 bước: thông tin, chọn mẫu phiếu, nhập đáp án.',
+          align: ContentAlign.bottom,
+        ),
+      ],
+    );
   }
 
   Future<void> _loadExams() async {
@@ -186,6 +218,7 @@ class _ExamsScreenState extends State<ExamsScreen> {
         Row(
           children: [
             Expanded(
+              key: _importBtnKey,
               child: SizedBox(
                 height: 48,
                 child: ElevatedButton.icon(
@@ -205,6 +238,7 @@ class _ExamsScreenState extends State<ExamsScreen> {
             ),
             const SizedBox(width: 10),
             Expanded(
+              key: _manualBtnKey,
               child: SizedBox(
                 height: 48,
                 child: OutlinedButton.icon(

@@ -3,6 +3,35 @@ from django.contrib.auth.models import User
 import json
 
 
+class UserSettings(models.Model):
+    """Per-user preferences (auto-delete, notifications, ...)."""
+    RETENTION_CHOICES = [
+        (0,   'Không tự xóa'),
+        (7,   'Sau 7 ngày'),
+        (30,  'Sau 30 ngày'),
+        (90,  'Sau 90 ngày'),
+        (180, 'Sau 6 tháng'),
+    ]
+
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name='settings'
+    )
+    temp_retention_days = models.PositiveIntegerField(
+        'Tự động xóa ảnh cũ (ngày)',
+        default=30,
+        choices=RETENTION_CHOICES,
+        help_text='Tự động xóa ảnh phiếu đã chấm sau N ngày. 0 = không xóa.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Cài đặt người dùng'
+        verbose_name_plural = 'Cài đặt người dùng'
+
+    def __str__(self):
+        return f"Settings({self.user.username})"
+
+
 class Exam(models.Model):
     """A test/exam with answer key."""
     

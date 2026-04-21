@@ -33,7 +33,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 
 from django.http import FileResponse
 
-from grading.models import Exam, ExamVariant, Submission
+from grading.models import Exam, ExamVariant, Submission, UserSettings
 from grading.grader import grade_image, parse_answer_key, compute_weighted_score
 from grading.views import EXAM_TEMPLATES
 
@@ -855,3 +855,95 @@ def template_image_api(request, code, filename):
         return Response({'error': 'Image not found'}, status=404)
 
     return FileResponse(open(image_path, 'rb'), content_type='image/jpeg')
+
+
+# =============================================================================
+# USER SETTINGS
+# =============================================================================
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def user_settings_api(request):
+    """
+    GET  /api/v1/settings/          — Lấy settings hiện tại
+    PUT  /api/v1/settings/          — Cập nhật
+    Body: { "temp_retention_days": 30 }
+    """
+    settings_obj, _created = UserSettings.objects.get_or_create(user=request.user)
+
+    if request.method == 'GET':
+        return Response({
+            'temp_retention_days': settings_obj.temp_retention_days,
+            'retention_choices': [
+                {'value': v, 'label': lbl}
+                for v, lbl in UserSettings.RETENTION_CHOICES
+            ],
+        })
+
+    # PUT / PATCH
+    days = request.data.get('temp_retention_days')
+    if days is not None:
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            return Response({'error': 'temp_retention_days phải là số'}, status=400)
+        valid = {v for v, _ in UserSettings.RETENTION_CHOICES}
+        if days not in valid:
+            return Response({'error': f'Giá trị không hợp lệ. Chỉ chấp nhận: {sorted(valid)}'}, status=400)
+        settings_obj.temp_retention_days = days
+        settings_obj.save()
+
+    return Response({
+        'success': True,
+        'temp_retention_days': settings_obj.temp_retention_days,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def cleanup_now_api(request):
+    """
+    POST /api/v1/settings/cleanup-now/
+    Xóa ngay tất cả ảnh đã chấm của user hiện tại (ngoài DB row).
+    Dùng khi user bấm 'Xóa ngay' ở Settings.
+    """
+    user = request.user
+    total_files = 0
+    total_size = 0
+
+    subs = Submission.objects.filter(teacher=user).exclude(image='')
+    for sub in subs:
+        if not sub.image:
+            continue
+        try:
+            image_path = sub.image.path
+        except Exception:
+            continue
+        if not image_path or not os.path.exists(image_path):
+            continue
+
+        base = os.path.splitext(image_path)[0]
+        related = [
+            image_path,
+            f"{base}_result.jpg",
+            f"{base}_overlay.jpg",
+            f"{base}_name.jpg",
+        ]
+        for p in related:
+            if os.path.exists(p):
+                try:
+                    total_size += os.path.getsize(p)
+                    os.remove(p)
+                    total_files += 1
+                except OSError:
+                    pass
+
+        sub.image = ''
+        sub.save(update_fields=['image'])
+
+    return Response({
+        'success': True,
+        'files_deleted': total_files,
+        'bytes_freed': total_size,
+        'mb_freed': round(total_size / (1024 * 1024), 2),
+    })

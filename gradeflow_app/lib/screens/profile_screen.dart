@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../config/api_config.dart';
 import '../config/theme.dart';
 import '../services/auth_service.dart';
+import 'settings_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -129,7 +130,29 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
+
+          // Settings entry
+          Card(
+            child: ListTile(
+              leading: Icon(LucideIcons.settings,
+                  color: GradeFlowTheme.primary),
+              title: Text('Cài đặt',
+                  style: GoogleFonts.dmSans(
+                      fontSize: 15, fontWeight: FontWeight.w600)),
+              subtitle: Text('Tự động xóa ảnh cũ, xem lại hướng dẫn',
+                  style: GoogleFonts.dmSans(
+                      fontSize: 12,
+                      color: GradeFlowTheme.onSurfaceVariant)),
+              trailing: const Icon(LucideIcons.chevronRight, size: 18),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const SettingsScreen()),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
 
           // Logout button
           SizedBox(

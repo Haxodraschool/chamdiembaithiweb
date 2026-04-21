@@ -20,6 +20,8 @@ class ApiConfig {
   static const String grade = '$apiPrefix/grade/';
   static const String templates = '$apiPrefix/templates/';
   static const String submissions = '$apiPrefix/submissions/';
+  static const String userSettings = '$apiPrefix/settings/';
+  static const String cleanupNow = '$apiPrefix/settings/cleanup-now/';
 
   static String examDetail(int id) => '$apiPrefix/exams/$id/';
   static String examDelete(int id) => '$apiPrefix/exams/$id/delete/';

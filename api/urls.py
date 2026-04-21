@@ -35,4 +35,8 @@ urlpatterns = [
     # Submissions
     path('v1/submissions/', views.submissions_list_api, name='submissions_list'),
     path('v1/submissions/<int:submission_id>/', views.submission_detail_api, name='submission_detail'),
+
+    # User settings
+    path('v1/settings/', views.user_settings_api, name='user_settings'),
+    path('v1/settings/cleanup-now/', views.cleanup_now_api, name='cleanup_now'),
 ]

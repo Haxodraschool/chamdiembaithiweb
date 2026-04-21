@@ -13,7 +13,9 @@ import '../models/exam.dart';
 import '../models/grade_result.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
+import '../services/coach_mark_service.dart';
 import 'grade_result_screen.dart';
+import 'batch_scan_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   final Exam? preselectedExam;
@@ -37,11 +39,53 @@ class _ScanScreenState extends State<ScanScreen> {
   // ML Kit Document Scanner (Android/iOS only)
   DocumentScanner? _documentScanner;
 
+  // Coach mark targets
+  final GlobalKey _examKey = GlobalKey();
+  final GlobalKey _scanKey = GlobalKey();
+  final GlobalKey _pickersKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
     _selectedExam = widget.preselectedExam;
     _loadExams();
+    // Show coach marks on first visit after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowCoachMarks());
+  }
+
+  Future<void> _maybeShowCoachMarks() async {
+    await Future.delayed(const Duration(milliseconds: 400));
+    if (!mounted) return;
+    await CoachMarkService.show(
+      context: context,
+      screenKey: 'scan_screen',
+      targets: [
+        CoachMarkService.buildTarget(
+          identify: 'exam',
+          key: _examKey,
+          title: 'Bước 1: Chọn đề thi',
+          description:
+              'Chọn đề thi tương ứng với phiếu bạn sắp quét. Nếu chưa chọn, hệ thống chỉ quét không chấm.',
+          align: ContentAlign.bottom,
+        ),
+        CoachMarkService.buildTarget(
+          identify: 'scan',
+          key: _scanKey,
+          title: 'Bước 2: Quét phiếu',
+          description:
+              'Nhấn để mở Google ML Kit Scanner. Đưa camera vào phiếu, hệ thống tự cắt viền và nắn thẳng.',
+          align: ContentAlign.bottom,
+        ),
+        CoachMarkService.buildTarget(
+          identify: 'pickers',
+          key: _pickersKey,
+          title: 'Tuỳ chọn khác',
+          description:
+              'Bạn cũng có thể chụp Camera bình thường hoặc chọn ảnh có sẵn từ Thư viện nếu cần.',
+          align: ContentAlign.top,
+        ),
+      ],
+    );
   }
 
   @override
@@ -206,6 +250,19 @@ class _ScanScreenState extends State<ScanScreen> {
                 onPressed: () => Navigator.pop(context),
               )
             : null,
+        actions: [
+          IconButton(
+            tooltip: 'Chấm hàng loạt',
+            icon: const Icon(LucideIcons.layers),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) =>
+                    BatchScanScreen(preselectedExam: _selectedExam),
+              ),
+            ),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -231,7 +288,7 @@ class _ScanScreenState extends State<ScanScreen> {
             const SizedBox(height: 24),
 
             // Step 1: Exam selector
-            _buildExamSelector(),
+            Container(key: _examKey, child: _buildExamSelector()),
             const SizedBox(height: 20),
 
             // Step 2: Scan buttons
@@ -305,6 +362,7 @@ class _ScanScreenState extends State<ScanScreen> {
       children: [
         // Primary: Document Scanner
         SizedBox(
+          key: _scanKey,
           height: 56,
           child: ElevatedButton.icon(
             onPressed: _grading ? null : _scanDocument,
@@ -322,6 +380,7 @@ class _ScanScreenState extends State<ScanScreen> {
 
         // Secondary actions
         Row(
+          key: _pickersKey,
           children: [
             Expanded(
               child: OutlinedButton.icon(

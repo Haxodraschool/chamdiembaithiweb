@@ -6,17 +6,16 @@ import 'config/theme.dart';
 import 'services/auth_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_shell.dart';
+import 'screens/onboarding_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Status bar style
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.dark,
   ));
 
-  // Preferred orientations
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
@@ -24,17 +23,36 @@ void main() async {
 
   final authService = AuthService();
   await authService.loadToken();
+  final seenOnboarding = await OnboardingScreen.hasSeenOnboarding();
 
   runApp(
     ChangeNotifierProvider<AuthService>.value(
       value: authService,
-      child: const GradeFlowApp(),
+      child: GradeFlowApp(showOnboarding: !seenOnboarding),
     ),
   );
 }
 
-class GradeFlowApp extends StatelessWidget {
-  const GradeFlowApp({super.key});
+class GradeFlowApp extends StatefulWidget {
+  final bool showOnboarding;
+  const GradeFlowApp({super.key, required this.showOnboarding});
+
+  @override
+  State<GradeFlowApp> createState() => _GradeFlowAppState();
+}
+
+class _GradeFlowAppState extends State<GradeFlowApp> {
+  late bool _showOnboarding;
+
+  @override
+  void initState() {
+    super.initState();
+    _showOnboarding = widget.showOnboarding;
+  }
+
+  void _finishOnboarding() {
+    setState(() => _showOnboarding = false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,14 +60,16 @@ class GradeFlowApp extends StatelessWidget {
       title: 'GradeFlow',
       debugShowCheckedModeBanner: false,
       theme: GradeFlowTheme.lightTheme,
-      home: Consumer<AuthService>(
-        builder: (context, auth, _) {
-          if (auth.isAuthenticated) {
-            return const MainShell();
-          }
-          return const LoginScreen();
-        },
-      ),
+      home: _showOnboarding
+          ? OnboardingScreen(onDone: _finishOnboarding)
+          : Consumer<AuthService>(
+              builder: (context, auth, _) {
+                if (auth.isAuthenticated) {
+                  return const MainShell();
+                }
+                return const LoginScreen();
+              },
+            ),
     );
   }
 }

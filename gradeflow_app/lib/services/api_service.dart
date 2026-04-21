@@ -83,6 +83,42 @@ class ApiService {
     throw Exception('Failed to load templates: ${response.statusCode}');
   }
 
+  // ─── User Settings ────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> getSettings() async {
+    final response = await http.get(
+      Uri.parse('${ApiConfig.baseUrl}${ApiConfig.userSettings}'),
+      headers: _headers,
+    );
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(json.decode(response.body));
+    }
+    throw Exception('Failed to load settings: ${response.statusCode}');
+  }
+
+  Future<Map<String, dynamic>> updateSettings({required int retentionDays}) async {
+    final response = await http.put(
+      Uri.parse('${ApiConfig.baseUrl}${ApiConfig.userSettings}'),
+      headers: _headers,
+      body: json.encode({'temp_retention_days': retentionDays}),
+    );
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(json.decode(response.body));
+    }
+    throw Exception('Failed to update settings: ${response.statusCode} ${response.body}');
+  }
+
+  Future<Map<String, dynamic>> cleanupNow() async {
+    final response = await http.post(
+      Uri.parse('${ApiConfig.baseUrl}${ApiConfig.cleanupNow}'),
+      headers: _headers,
+    );
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(json.decode(response.body));
+    }
+    throw Exception('Cleanup failed: ${response.statusCode}');
+  }
+
   // ─── Parse Excel / Image ──────────────────────────────────────────
 
   Future<Map<String, dynamic>> parseExcelFile(Uint8List bytes, String fileName) async {
