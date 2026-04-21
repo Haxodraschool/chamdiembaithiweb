@@ -33,7 +33,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 
 from django.http import FileResponse
 
-from grading.models import Exam, ExamVariant, Submission, UserSettings
+from grading.models import Exam, ExamVariant, Submission, UserSettings, TrainingSample
 from grading.grader import grade_image, parse_answer_key, compute_weighted_score
 from grading.views import EXAM_TEMPLATES
 
@@ -91,6 +91,7 @@ def register_api(request):
             'full_name': user.get_full_name() or user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
+            'is_admin': user.is_superuser,
         }
     }, status=status.HTTP_201_CREATED)
 
@@ -137,6 +138,7 @@ def login_api(request):
             'full_name': user.get_full_name() or user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
+            'is_admin': user.is_superuser,
         }
     })
 
@@ -161,6 +163,7 @@ def me_api(request):
         'full_name': user.get_full_name() or user.email,
         'first_name': user.first_name,
         'last_name': user.last_name,
+        'is_admin': user.is_superuser,
     })
 
 
@@ -874,6 +877,7 @@ def user_settings_api(request):
     if request.method == 'GET':
         return Response({
             'temp_retention_days': settings_obj.temp_retention_days,
+            'contribute_training_data': settings_obj.contribute_training_data,
             'retention_choices': [
                 {'value': v, 'label': lbl}
                 for v, lbl in UserSettings.RETENTION_CHOICES
@@ -891,11 +895,17 @@ def user_settings_api(request):
         if days not in valid:
             return Response({'error': f'Giá trị không hợp lệ. Chỉ chấp nhận: {sorted(valid)}'}, status=400)
         settings_obj.temp_retention_days = days
-        settings_obj.save()
+
+    contrib = request.data.get('contribute_training_data')
+    if contrib is not None:
+        settings_obj.contribute_training_data = bool(contrib)
+
+    settings_obj.save()
 
     return Response({
         'success': True,
         'temp_retention_days': settings_obj.temp_retention_days,
+        'contribute_training_data': settings_obj.contribute_training_data,
     })
 
 
@@ -947,3 +957,168 @@ def cleanup_now_api(request):
         'bytes_freed': total_size,
         'mb_freed': round(total_size / (1024 * 1024), 2),
     })
+
+
+# =============================================================================
+# TRAINING DATA COLLECTION (Active Learning)
+# =============================================================================
+
+_MAX_TRAINING_FILE_BYTES = 10 * 1024 * 1024   # 10 MB
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def training_upload_api(request):
+    """
+    POST /api/v1/training/upload/
+    Multipart:
+      image: JPEG file
+      made, sbd, template_code, answers_json, confidence (form fields)
+      submission_id (optional)
+
+    Chỉ accept nếu user đã bật opt-in `contribute_training_data`.
+    """
+    user = request.user
+    settings_obj, _ = UserSettings.objects.get_or_create(user=user)
+
+    if not settings_obj.contribute_training_data:
+        return Response(
+            {'error': 'Bạn chưa bật tùy chọn đóng góp ảnh trong Cài đặt.'},
+            status=403,
+        )
+
+    img = request.FILES.get('image')
+    if not img:
+        return Response({'error': 'Thiếu file ảnh.'}, status=400)
+    if img.size > _MAX_TRAINING_FILE_BYTES:
+        return Response({'error': 'Ảnh vượt quá 10MB.'}, status=400)
+
+    made = (request.data.get('made') or '').strip()
+    sbd = (request.data.get('sbd') or '').strip()
+    template_code = (request.data.get('template_code') or '').strip()
+    answers_json = request.data.get('answers_json') or ''
+    try:
+        confidence = float(request.data.get('confidence') or 1.0)
+    except (TypeError, ValueError):
+        confidence = 1.0
+
+    submission = None
+    sub_id = request.data.get('submission_id')
+    if sub_id:
+        try:
+            submission = Submission.objects.filter(id=int(sub_id), teacher=user).first()
+        except (TypeError, ValueError):
+            submission = None
+
+    sample = TrainingSample.objects.create(
+        teacher=user,
+        submission=submission,
+        image=img,
+        made=made,
+        sbd=sbd,
+        template_code=template_code,
+        answers_json=answers_json,
+        confidence=confidence,
+    )
+
+    return Response({
+        'success': True,
+        'id': sample.id,
+        'size': img.size,
+    }, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def training_stats_api(request):
+    """
+    GET /api/v1/training/stats/
+    Admin-only. Trả về số lượng + tổng dung lượng training samples.
+    """
+    if not request.user.is_superuser:
+        return Response({'error': 'Chỉ admin mới xem được.'}, status=403)
+
+    samples = TrainingSample.objects.all()
+    count = samples.count()
+    total_bytes = 0
+    last_uploaded = None
+    for s in samples.only('image', 'uploaded_at'):
+        try:
+            if s.image and os.path.exists(s.image.path):
+                total_bytes += os.path.getsize(s.image.path)
+        except Exception:
+            pass
+        if last_uploaded is None or (s.uploaded_at and s.uploaded_at > last_uploaded):
+            last_uploaded = s.uploaded_at
+
+    return Response({
+        'count': count,
+        'total_bytes': total_bytes,
+        'total_mb': round(total_bytes / (1024 * 1024), 2),
+        'last_uploaded': last_uploaded.isoformat() if last_uploaded else None,
+        'contributors': TrainingSample.objects.values_list('teacher', flat=True).distinct().count(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def training_download_api(request):
+    """
+    GET /api/v1/training/download/
+    Admin-only. Stream ZIP chứa images/*.jpg + labels.json.
+    """
+    if not request.user.is_superuser:
+        return Response({'error': 'Chỉ admin mới tải được.'}, status=403)
+
+    import zipfile
+    import io
+    import json as _json
+    from django.http import HttpResponse
+    from datetime import datetime
+
+    buf = io.BytesIO()
+    labels = []
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for sample in TrainingSample.objects.select_related('teacher').all():
+            if not sample.image:
+                continue
+            try:
+                path = sample.image.path
+                if not os.path.exists(path):
+                    continue
+                arcname = f"images/sample_{sample.id:06d}.jpg"
+                zf.write(path, arcname)
+                labels.append({
+                    'id': sample.id,
+                    'file': arcname,
+                    'teacher': sample.teacher.username,
+                    'made': sample.made,
+                    'sbd': sample.sbd,
+                    'template_code': sample.template_code,
+                    'confidence': sample.confidence,
+                    'uploaded_at': sample.uploaded_at.isoformat(),
+                    'answers': _safe_json_loads(sample.answers_json),
+                })
+            except Exception as e:
+                logger.warning(f"Training download skip sample {sample.id}: {e}")
+
+        zf.writestr('labels.json', _json.dumps(labels, ensure_ascii=False, indent=2))
+        zf.writestr('README.txt',
+                    f"GradeFlow Training Samples\n"
+                    f"Exported: {datetime.now().isoformat()}\n"
+                    f"Total samples: {len(labels)}\n")
+
+    buf.seek(0)
+    resp = HttpResponse(buf.getvalue(), content_type='application/zip')
+    fname = f"training_samples_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    resp['Content-Disposition'] = f'attachment; filename="{fname}"'
+    return resp
+
+
+def _safe_json_loads(s):
+    try:
+        import json as _j
+        return _j.loads(s) if s else None
+    except Exception:
+        return None

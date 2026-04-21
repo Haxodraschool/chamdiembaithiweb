@@ -39,4 +39,9 @@ urlpatterns = [
     # User settings
     path('v1/settings/', views.user_settings_api, name='user_settings'),
     path('v1/settings/cleanup-now/', views.cleanup_now_api, name='cleanup_now'),
+
+    # Training data (Active Learning)
+    path('v1/training/upload/', views.training_upload_api, name='training_upload'),
+    path('v1/training/stats/', views.training_stats_api, name='training_stats'),
+    path('v1/training/download/', views.training_download_api, name='training_download'),
 ]

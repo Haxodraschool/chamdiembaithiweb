@@ -96,16 +96,70 @@ class ApiService {
     throw Exception('Failed to load settings: ${response.statusCode}');
   }
 
-  Future<Map<String, dynamic>> updateSettings({required int retentionDays}) async {
+  Future<Map<String, dynamic>> updateSettings({
+    int? retentionDays,
+    bool? contributeTraining,
+  }) async {
+    final body = <String, dynamic>{};
+    if (retentionDays != null) body['temp_retention_days'] = retentionDays;
+    if (contributeTraining != null) {
+      body['contribute_training_data'] = contributeTraining;
+    }
     final response = await http.put(
       Uri.parse('${ApiConfig.baseUrl}${ApiConfig.userSettings}'),
       headers: _headers,
-      body: json.encode({'temp_retention_days': retentionDays}),
+      body: json.encode(body),
     );
     if (response.statusCode == 200) {
       return Map<String, dynamic>.from(json.decode(response.body));
     }
     throw Exception('Failed to update settings: ${response.statusCode} ${response.body}');
+  }
+
+  // ─── Training data (Active Learning) ──────────────────────────────
+
+  /// Upload one clean sample. Returns true on success.
+  Future<bool> uploadTrainingSample({
+    required Uint8List imageBytes,
+    required String fileName,
+    required Map<String, String> metadata,
+  }) async {
+    final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.trainingUpload}');
+    final request = http.MultipartRequest('POST', uri);
+    request.headers['Authorization'] = 'Token $token';
+    request.files.add(
+      http.MultipartFile.fromBytes('image', imageBytes, filename: fileName),
+    );
+    metadata.forEach((k, v) => request.fields[k] = v);
+    final streamed = await request.send();
+    return streamed.statusCode == 201 || streamed.statusCode == 200;
+  }
+
+  Future<Map<String, dynamic>> getTrainingStats() async {
+    final response = await http.get(
+      Uri.parse('${ApiConfig.baseUrl}${ApiConfig.trainingStats}'),
+      headers: _headers,
+    );
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(json.decode(response.body));
+    }
+    if (response.statusCode == 403) {
+      throw Exception('Chỉ admin mới xem được.');
+    }
+    throw Exception('Failed to fetch stats: ${response.statusCode}');
+  }
+
+  /// Download training ZIP to a file path. Returns file bytes.
+  Future<Uint8List> downloadTrainingZip() async {
+    final response = await http.get(
+      Uri.parse('${ApiConfig.baseUrl}${ApiConfig.trainingDownload}'),
+      headers: {'Authorization': 'Token $token'},
+    );
+    if (response.statusCode == 200) return response.bodyBytes;
+    if (response.statusCode == 403) {
+      throw Exception('Chỉ admin mới tải được.');
+    }
+    throw Exception('Download failed: ${response.statusCode}');
   }
 
   Future<Map<String, dynamic>> cleanupNow() async {

@@ -14,6 +14,7 @@ import '../models/grade_result.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
 import '../services/coach_mark_service.dart';
+import '../services/training_uploader.dart';
 import 'grade_result_screen.dart';
 import 'batch_scan_screen.dart';
 
@@ -205,6 +206,16 @@ class _ScanScreenState extends State<ScanScreen> {
           _lastResult = result;
           _grading = false;
         });
+
+        // Active learning: queue clean samples for upload (fire-and-forget).
+        if (result.isCleanForTraining && auth.token != null) {
+          TrainingUploader.instance.enqueue(
+            token: auth.token!,
+            imageBytes: _scannedBytes!,
+            metadata: result.toTrainingMetadata(),
+            fileName: _scannedFile!.name,
+          );
+        }
 
         // Navigate to result screen
         Navigator.push(

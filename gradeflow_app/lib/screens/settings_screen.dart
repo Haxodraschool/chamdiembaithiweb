@@ -20,6 +20,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _loading = true;
   String? _error;
   int _retentionDays = 30;
+  bool _contributeTraining = false;
   List<Map<String, dynamic>> _choices = [];
   bool _saving = false;
   bool _cleaning = false;
@@ -44,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _retentionDays = data['temp_retention_days'] ?? 30;
+        _contributeTraining = data['contribute_training_data'] == true;
         _choices = List<Map<String, dynamic>>.from(data['retention_choices'] ?? []);
         _loading = false;
       });
@@ -71,6 +73,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _saveContribute(bool value) async {
+    final auth = context.read<AuthService>();
+    final prev = _contributeTraining;
+    setState(() => _contributeTraining = value);
+    try {
+      final api = ApiService(token: auth.token!);
+      await api.updateSettings(contributeTraining: value);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(value
+              ? 'Đã bật đóng góp ảnh training'
+              : 'Đã tắt đóng góp ảnh training'),
+          backgroundColor: GradeFlowTheme.success,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _contributeTraining = prev);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Lỗi: $e'), backgroundColor: Colors.red),
         );
@@ -210,6 +238,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           side: const BorderSide(color: GradeFlowTheme.error),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 28),
+                    _sectionTitle('Đóng góp', LucideIcons.heartHandshake),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Góp ảnh để cải thiện AI',
+                                          style: GoogleFonts.dmSans(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600)),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Chỉ những ảnh phiếu có mã đề, SBD và câu '
+                                        'trả lời nhận diện 100% (không dấu "?") '
+                                        'mới được gửi. Ảnh có thể chứa thông tin '
+                                        'học sinh — cân nhắc trước khi bật.',
+                                        style: GoogleFonts.dmSans(
+                                            fontSize: 12,
+                                            height: 1.4,
+                                            color: GradeFlowTheme
+                                                .onSurfaceVariant),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Switch(
+                                  value: _contributeTraining,
+                                  onChanged: _saving ? null : _saveContribute,
+                                ),
+                              ],
+                            ),
+                            if (_contributeTraining) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: GradeFlowTheme.primaryFixed,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(LucideIcons.checkCircle,
+                                        size: 14,
+                                        color: GradeFlowTheme.primary),
+                                    const SizedBox(width: 6),
+                                    Text('Đã bật đóng góp',
+                                        style: GoogleFonts.dmSans(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: GradeFlowTheme.primary)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     ),

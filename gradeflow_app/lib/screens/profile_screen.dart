@@ -7,6 +7,7 @@ import '../config/api_config.dart';
 import '../config/theme.dart';
 import '../services/auth_service.dart';
 import 'settings_screen.dart';
+import 'admin_training_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -131,6 +132,42 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+
+          // Admin-only: Training data manager
+          if (auth.isAdmin) ...[
+            Card(
+              color: GradeFlowTheme.primaryFixed,
+              child: ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: GradeFlowTheme.primary,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(LucideIcons.shieldCheck,
+                      color: Colors.white, size: 20),
+                ),
+                title: Text('Quản trị training data',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: GradeFlowTheme.primary)),
+                subtitle: Text('Xem thống kê và tải gói ảnh training (.zip)',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 12,
+                        color: GradeFlowTheme.primary.withOpacity(0.8))),
+                trailing: Icon(LucideIcons.chevronRight,
+                    size: 18, color: GradeFlowTheme.primary),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AdminTrainingScreen(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
 
           // Settings entry
           Card(

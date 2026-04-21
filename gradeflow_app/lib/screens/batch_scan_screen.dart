@@ -12,6 +12,7 @@ import '../models/exam.dart';
 import '../models/grade_result.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
+import '../services/training_uploader.dart';
 import 'grade_result_screen.dart';
 
 /// Batch scanning: scan multiple papers in one session, grade each automatically,
@@ -133,6 +134,14 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
                       fileName: fileName));
               _gradingDone++;
             });
+            if (result.isCleanForTraining && auth.token != null) {
+              TrainingUploader.instance.enqueue(
+                token: auth.token!,
+                imageBytes: bytes,
+                metadata: result.toTrainingMetadata(),
+                fileName: fileName,
+              );
+            }
           }
         } catch (e) {
           if (mounted) {

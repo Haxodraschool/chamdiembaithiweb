@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:provider/provider.dart';
 
+import '../services/auth_service.dart';
 import 'dashboard_screen.dart';
 import 'exams_screen.dart';
 import 'scan_screen.dart';
@@ -16,6 +18,14 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AuthService>().refreshMe();
+    });
+  }
 
   final List<Widget> _screens = const [
     DashboardScreen(),

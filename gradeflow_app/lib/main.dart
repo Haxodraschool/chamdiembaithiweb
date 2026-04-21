@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'config/theme.dart';
 import 'services/auth_service.dart';
+import 'services/idle_detector.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/onboarding_screen.dart';
@@ -65,7 +66,10 @@ class _GradeFlowAppState extends State<GradeFlowApp> {
           : Consumer<AuthService>(
               builder: (context, auth, _) {
                 if (auth.isAuthenticated) {
-                  return const MainShell();
+                  return IdleDetector(
+                    tokenProvider: () => auth.token ?? '',
+                    child: const MainShell(),
+                  );
                 }
                 return const LoginScreen();
               },

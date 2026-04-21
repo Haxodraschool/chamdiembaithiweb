@@ -22,6 +22,12 @@ class UserSettings(models.Model):
         choices=RETENTION_CHOICES,
         help_text='Tự động xóa ảnh phiếu đã chấm sau N ngày. 0 = không xóa.',
     )
+    contribute_training_data = models.BooleanField(
+        'Góp ảnh để cải thiện AI',
+        default=False,
+        help_text='Cho phép ứng dụng gửi ảnh phiếu đã chấm (sạch, 100% nhận diện) '
+                  'lên server để cải thiện mô hình nhận dạng.',
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -257,3 +263,35 @@ class Submission(models.Model):
             except json.JSONDecodeError:
                 return []
         return []
+
+
+class TrainingSample(models.Model):
+    """Ảnh phiếu 'sạch' do giáo viên đóng góp tự nguyện để train CNN."""
+    teacher = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='training_samples'
+    )
+    submission = models.ForeignKey(
+        Submission,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='training_samples',
+    )
+    image = models.ImageField('Ảnh phiếu', upload_to='training/%Y/%m/')
+    made = models.CharField('Mã đề', max_length=10, blank=True, default='')
+    sbd = models.CharField('Số báo danh', max_length=20, blank=True, default='')
+    template_code = models.CharField('Mã phiếu', max_length=30, blank=True, default='')
+    answers_json = models.TextField(
+        'Labels (JSON)',
+        blank=True, default='',
+        help_text='JSON: {"part1": [...], "part2": {...}, "part3": [...]}',
+    )
+    confidence = models.FloatField('Độ tự tin', default=1.0)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Mẫu training'
+        verbose_name_plural = 'Mẫu training'
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"Sample#{self.id} by {self.teacher.username} ({self.made}/{self.sbd})"

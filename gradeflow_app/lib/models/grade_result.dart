@@ -45,6 +45,99 @@ class GradeResult {
     this.nameImageBase64 = '',
   });
 
+  /// Returns `true` when the detection is fully confident — no `?` anywhere in
+  /// mã đề, SBD, part1/2/3. Used to decide whether to upload the scan as a
+  /// training sample for CNN active learning.
+  bool get isCleanForTraining {
+    if (!success) return false;
+    if (made.isEmpty || made.contains('?')) return false;
+    if (sbd.isEmpty || sbd.contains('?')) return false;
+
+    bool _hasUnknown(dynamic v) {
+      if (v == null) return false;
+      if (v is String) return v.contains('?');
+      if (v is Map) return v.values.any(_hasUnknown);
+      if (v is List) return v.any(_hasUnknown);
+      return false;
+    }
+
+    for (final v in part1.values) {
+      if (_hasUnknown(v)) return false;
+    }
+    for (final v in part2.values) {
+      if (_hasUnknown(v)) return false;
+    }
+    for (final v in part3.values) {
+      if (_hasUnknown(v)) return false;
+    }
+    // Require at least some answers detected (avoid empty phiếu)
+    if (part1.isEmpty && part2.isEmpty && part3.isEmpty) return false;
+    return true;
+  }
+
+  /// Compute a 0..1 confidence score for active-learning sampling.
+  /// Currently binary: 1.0 if clean, else ratio of non-`?` cells.
+  double get confidenceScore {
+    int total = 0;
+    int unknown = 0;
+    void _count(dynamic v) {
+      if (v == null) return;
+      if (v is String) {
+        total += 1;
+        if (v.contains('?') || v.isEmpty) unknown += 1;
+      } else if (v is Map) {
+        v.values.forEach(_count);
+      } else if (v is List) {
+        v.forEach(_count);
+      }
+    }
+
+    for (final v in part1.values) _count(v);
+    for (final v in part2.values) _count(v);
+    for (final v in part3.values) _count(v);
+    if (total == 0) return 0.0;
+    return 1.0 - (unknown / total);
+  }
+
+  /// Metadata to send along with the image when uploading a training sample.
+  Map<String, String> toTrainingMetadata() {
+    return {
+      'made': made,
+      'sbd': sbd,
+      'confidence': confidenceScore.toStringAsFixed(4),
+      'answers_json': _encodeAnswers(),
+      if (submissionId != null) 'submission_id': submissionId!.toString(),
+    };
+  }
+
+  String _encodeAnswers() {
+    // Best-effort JSON encode; avoid importing dart:convert here by caller.
+    final sb = StringBuffer('{"part1":');
+    sb.write(_jsonEncode(part1));
+    sb.write(',"part2":');
+    sb.write(_jsonEncode(part2));
+    sb.write(',"part3":');
+    sb.write(_jsonEncode(part3));
+    sb.write('}');
+    return sb.toString();
+  }
+
+  String _jsonEncode(dynamic v) {
+    if (v == null) return 'null';
+    if (v is String) return '"${v.replaceAll('"', '\\"')}"';
+    if (v is num || v is bool) return v.toString();
+    if (v is List) {
+      return '[${v.map(_jsonEncode).join(',')}]';
+    }
+    if (v is Map) {
+      final entries = v.entries
+          .map((e) => '"${e.key}":${_jsonEncode(e.value)}')
+          .join(',');
+      return '{$entries}';
+    }
+    return '"${v.toString()}"';
+  }
+
   factory GradeResult.fromJson(Map<String, dynamic> json) {
     return GradeResult(
       success: json['success'] ?? false,

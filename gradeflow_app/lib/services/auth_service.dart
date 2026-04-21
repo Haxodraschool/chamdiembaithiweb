@@ -20,6 +20,24 @@ class AuthService extends ChangeNotifier {
   String get userEmail => _user?['email'] ?? '';
   String get userInitial =>
       (userName.isNotEmpty ? userName[0] : 'G').toUpperCase();
+  bool get isAdmin => _user?['is_admin'] == true;
+
+  /// Re-fetch /auth/me/ to pick up latest flags (is_admin, etc).
+  Future<void> refreshMe() async {
+    if (_token == null) return;
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.me}'),
+        headers: authHeaders,
+      );
+      if (response.statusCode == 200) {
+        _user = json.decode(response.body);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth_user', json.encode(_user));
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
 
   /// Load token from SharedPreferences on app start.
   Future<void> loadToken() async {

@@ -1,5 +1,20 @@
 from django.contrib import admin
-from .models import Exam, Submission
+from .models import Exam, Submission, TrainingSample, UserSettings
+
+
+@admin.register(UserSettings)
+class UserSettingsAdmin(admin.ModelAdmin):
+    list_display = ('user', 'temp_retention_days', 'contribute_training_data', 'updated_at')
+    list_filter = ('contribute_training_data', 'temp_retention_days')
+    search_fields = ('user__username', 'user__email')
+
+
+@admin.register(TrainingSample)
+class TrainingSampleAdmin(admin.ModelAdmin):
+    list_display = ('id', 'teacher', 'made', 'sbd', 'template_code', 'confidence', 'uploaded_at')
+    list_filter = ('template_code', 'uploaded_at')
+    search_fields = ('teacher__username', 'made', 'sbd')
+    readonly_fields = ('uploaded_at',)
 
 
 @admin.register(Exam)
