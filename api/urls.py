@@ -25,6 +25,10 @@ urlpatterns = [
     path('v1/parse-excel/', views.parse_excel_api, name='parse_excel'),
     path('v1/parse-image/', views.parse_image_api, name='parse_image'),
 
+    # Templates — answer sheet formats
+    path('v1/templates/', views.templates_list_api, name='templates_list'),
+    path('v1/templates/<str:code>/image/<str:filename>', views.template_image_api, name='template_image'),
+
     # Grading — core endpoint for mobile
     path('v1/grade/', views.grade_api, name='grade'),
 

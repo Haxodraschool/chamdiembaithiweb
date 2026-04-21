@@ -150,11 +150,11 @@ class GradeResultScreen extends StatelessWidget {
         if (result.weighted != null) _buildPartScores(),
         const SizedBox(height: 16),
 
-        // ── Result Image (annotated overlay from engine) ──
+        // ── Result Image or Visual Answer Overlay ──
         if (result.resultImageBase64.isNotEmpty)
           _buildResultImage(),
-        if (result.resultImageBase64.isEmpty)
-          _buildScannedImage(),
+        if (result.resultImageBase64.isEmpty && result.part1.isNotEmpty)
+          _buildAnswerBubbleOverlay(),
         const SizedBox(height: 16),
 
         // ── Part I: Trắc nghiệm ABCD ──
@@ -288,7 +288,17 @@ class GradeResultScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildScannedImage() {
+  /// Visual answer bubble overlay — shows ABCD bubbles with
+  /// green circle = correct, red circle = wrong, arrow to correct answer
+  Widget _buildAnswerBubbleOverlay() {
+    const choices = ['A', 'B', 'C', 'D'];
+    final entries = result.part1.entries.toList();
+    entries.sort((a, b) {
+      final ai = int.tryParse(a.key) ?? 0;
+      final bi = int.tryParse(b.key) ?? 0;
+      return ai.compareTo(bi);
+    });
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -297,27 +307,150 @@ class GradeResultScreen extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(LucideIcons.image,
+                Icon(LucideIcons.checkCircle,
                     size: 16, color: GradeFlowTheme.primary),
                 const SizedBox(width: 8),
-                Text('Ảnh đã quét',
+                Text('Kết quả đánh dấu',
                     style: GoogleFonts.dmSans(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
+                        fontSize: 15, fontWeight: FontWeight.w600)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                _legendDot(const Color(0xFF4CAF50), 'Đúng'),
+                const SizedBox(width: 12),
+                _legendDot(const Color(0xFFE53935), 'Sai'),
+                const SizedBox(width: 12),
+                _legendDot(const Color(0xFF2196F3), 'Đáp án đúng'),
               ],
             ),
             const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: InteractiveViewer(
-                minScale: 1.0,
-                maxScale: 4.0,
-                child: Image.memory(imageBytes,
-                    width: double.infinity, fit: BoxFit.contain),
-              ),
-            ),
+            // Bubble grid
+            ...entries.map((e) {
+              final qNum = e.key;
+              final detected = '${e.value}'.toUpperCase();
+              final correctRaw = result.correctAnswers[qNum];
+              final correct = correctRaw != null ? '$correctRaw'.toUpperCase() : '';
+              final hasCorrect = correct.isNotEmpty;
+              final isCorrect = hasCorrect && detected == correct;
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 36,
+                      child: Text('C$qNum',
+                          style: GoogleFonts.dmSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: GradeFlowTheme.onSurfaceVariant)),
+                    ),
+                    ...choices.map((ch) {
+                      final isDetected = detected == ch;
+                      final isCorrectChoice = correct == ch;
+
+                      Color bgColor;
+                      Color borderColor;
+                      Color textColor;
+                      double borderWidth = 1.5;
+
+                      if (isDetected && isCorrect) {
+                        // Student chose this and it's correct
+                        bgColor = const Color(0xFFE8F5E9);
+                        borderColor = const Color(0xFF4CAF50);
+                        textColor = const Color(0xFF2E7D32);
+                        borderWidth = 2.5;
+                      } else if (isDetected && !isCorrect && hasCorrect) {
+                        // Student chose this but it's wrong
+                        bgColor = const Color(0xFFFFEBEE);
+                        borderColor = const Color(0xFFE53935);
+                        textColor = const Color(0xFFC62828);
+                        borderWidth = 2.5;
+                      } else if (!isDetected && isCorrectChoice && hasCorrect && !isCorrect) {
+                        // This is the correct answer (student got it wrong)
+                        bgColor = const Color(0xFFE3F2FD);
+                        borderColor = const Color(0xFF2196F3);
+                        textColor = const Color(0xFF1565C0);
+                        borderWidth = 2.0;
+                      } else if (isDetected && !hasCorrect) {
+                        // Detected but no answer key
+                        bgColor = GradeFlowTheme.primary.withOpacity(0.08);
+                        borderColor = GradeFlowTheme.primary.withOpacity(0.4);
+                        textColor = GradeFlowTheme.primary;
+                        borderWidth = 2.0;
+                      } else {
+                        // Empty bubble
+                        bgColor = GradeFlowTheme.surfaceContainerLow;
+                        borderColor = GradeFlowTheme.outlineVariant;
+                        textColor = GradeFlowTheme.onSurfaceVariant.withOpacity(0.5);
+                        borderWidth = 1.0;
+                      }
+
+                      return Expanded(
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: bgColor,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: borderColor, width: borderWidth),
+                          ),
+                          child: Center(
+                            child: Text(ch,
+                                style: GoogleFonts.manrope(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: textColor)),
+                          ),
+                        ),
+                      );
+                    }),
+                    // Result icon
+                    SizedBox(
+                      width: 28,
+                      child: hasCorrect
+                          ? Icon(
+                              isCorrect
+                                  ? LucideIcons.checkCircle2
+                                  : LucideIcons.xCircle,
+                              size: 16,
+                              color: isCorrect
+                                  ? const Color(0xFF4CAF50)
+                                  : const Color(0xFFE53935),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                ),
+              );
+            }),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _legendDot(Color color, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.2),
+            shape: BoxShape.circle,
+            border: Border.all(color: color, width: 2),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(text,
+            style: GoogleFonts.dmSans(
+                fontSize: 10, color: GradeFlowTheme.onSurfaceVariant)),
+      ],
     );
   }
 

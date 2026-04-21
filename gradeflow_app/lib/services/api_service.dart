@@ -69,6 +69,20 @@ class ApiService {
     }
   }
 
+  // ─── Templates ────────────────────────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getTemplates() async {
+    final response = await http.get(
+      Uri.parse('${ApiConfig.baseUrl}${ApiConfig.templates}'),
+      headers: _headers,
+    );
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return List<Map<String, dynamic>>.from(data['templates'] ?? []);
+    }
+    throw Exception('Failed to load templates: ${response.statusCode}');
+  }
+
   // ─── Parse Excel / Image ──────────────────────────────────────────
 
   Future<Map<String, dynamic>> parseExcelFile(Uint8List bytes, String fileName) async {

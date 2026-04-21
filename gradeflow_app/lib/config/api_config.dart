@@ -18,6 +18,7 @@ class ApiConfig {
   static const String parseExcel = '$apiPrefix/parse-excel/';
   static const String parseImage = '$apiPrefix/parse-image/';
   static const String grade = '$apiPrefix/grade/';
+  static const String templates = '$apiPrefix/templates/';
   static const String submissions = '$apiPrefix/submissions/';
 
   static String examDetail(int id) => '$apiPrefix/exams/$id/';

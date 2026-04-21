@@ -31,8 +31,11 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.parsers import MultiPartParser, FormParser
 
+from django.http import FileResponse
+
 from grading.models import Exam, ExamVariant, Submission
 from grading.grader import grade_image, parse_answer_key, compute_weighted_score
+from grading.views import EXAM_TEMPLATES
 
 logger = logging.getLogger(__name__)
 
@@ -782,3 +785,62 @@ def submission_detail_api(request, submission_id):
         'graded_at': sub.graded_at.isoformat() if sub.graded_at else None,
         'processing_time': sub.processing_time,
     })
+
+
+# =============================================================================
+# TEMPLATES — List available answer sheet templates with preview images
+# =============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def templates_list_api(request):
+    """
+    GET /api/v1/templates/
+    Returns list of available answer sheet templates with metadata + preview image URLs.
+    """
+    base_url = request.build_absolute_uri('/api/v1/templates/')
+    result = []
+    for t in EXAM_TEMPLATES:
+        code = t['code']
+        folder = t.get('folder', '')
+        # Find preview images
+        template_dir = os.path.join(settings.BASE_DIR, 'cacmaubaithi', folder)
+        image_urls = []
+        if os.path.isdir(template_dir):
+            files = sorted(os.listdir(template_dir))
+            for f in files:
+                if f.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    image_urls.append(f'{base_url}{code}/image/{f}')
+
+        result.append({
+            'code': code,
+            'label': t.get('label', code),
+            'parts': t.get('parts', [0, 0, 0]),
+            'total': t.get('total', 0),
+            'desc': t.get('desc', ''),
+            'pages': t.get('pages', 1),
+            'images': image_urls,
+        })
+
+    return Response({'templates': result})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def template_image_api(request, code, filename):
+    """
+    GET /api/v1/templates/<code>/image/<filename>
+    Serve a template preview image.
+    """
+    # Find template by code
+    template = next((t for t in EXAM_TEMPLATES if t['code'] == code), None)
+    if not template:
+        return Response({'error': 'Template not found'}, status=404)
+
+    folder = template.get('folder', '')
+    image_path = os.path.join(settings.BASE_DIR, 'cacmaubaithi', folder, filename)
+
+    if not os.path.isfile(image_path):
+        return Response({'error': 'Image not found'}, status=404)
+
+    return FileResponse(open(image_path, 'rb'), content_type='image/jpeg')

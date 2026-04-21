@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,7 +12,6 @@ import 'package:image_picker/image_picker.dart';
 import '../config/theme.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
-import 'scan_screen.dart';
 
 class ExamImportScreen extends StatefulWidget {
   const ExamImportScreen({super.key});
@@ -36,10 +38,14 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
   String? _selectedTemplate;
   bool _saving = false;
 
+  // Document scanner
+  DocumentScanner? _documentScanner;
+
   @override
   void dispose() {
     _titleCtrl.dispose();
     _subjectCtrl.dispose();
+    _documentScanner?.close();
     super.dispose();
   }
 
@@ -57,7 +63,39 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
     _uploadFile(file.bytes!, file.name, isImage: false);
   }
 
-  Future<void> _pickImage() async {
+  /// Launch Google ML Kit document scanner to scan answer sheet
+  Future<void> _scanAnswerSheet() async {
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+         defaultTargetPlatform == TargetPlatform.iOS)) {
+      try {
+        _documentScanner ??= DocumentScanner(
+          options: DocumentScannerOptions(
+            documentFormat: DocumentFormat.jpeg,
+            mode: ScannerMode.full,
+            pageLimit: 1,
+            isGalleryImport: true,
+          ),
+        );
+        final result = await _documentScanner!.scanDocument();
+        final images = result.images;
+        if (images.isNotEmpty && mounted) {
+          final file = File(images.first);
+          final bytes = await file.readAsBytes();
+          final name = images.first.split('/').last;
+          _uploadFile(bytes, name, isImage: true);
+          return;
+        }
+      } catch (e) {
+        debugPrint('Document scanner error: $e');
+      }
+    }
+    // Fallback: use gallery picker for web/desktop
+    _pickImageFallback();
+  }
+
+  /// Fallback: pick image from gallery (for web/desktop)
+  Future<void> _pickImageFallback() async {
     final picker = ImagePicker();
     final xfile = await picker.pickImage(source: ImageSource.gallery);
     if (xfile == null) return;
@@ -300,12 +338,12 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
         ),
         const SizedBox(height: 20),
 
-        // Image pick button
+        // Scan button — uses Google ML Kit Document Scanner
         Center(
           child: ElevatedButton.icon(
-            onPressed: _uploading ? null : _pickImage,
-            icon: const Icon(LucideIcons.camera, size: 20),
-            label: Text('Chọn ảnh phiếu đáp án',
+            onPressed: _uploading ? null : _scanAnswerSheet,
+            icon: const Icon(LucideIcons.scan, size: 20),
+            label: Text('Quét phiếu đáp án',
                 style: GoogleFonts.dmSans(
                     fontSize: 15, fontWeight: FontWeight.w600)),
             style: ElevatedButton.styleFrom(
@@ -318,7 +356,7 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
           ),
         ),
         const SizedBox(height: 8),
-        Text('Chọn ảnh phiếu đáp án đã tô từ thư viện',
+        Text('Dùng camera quét phiếu đáp án đã tô (ML Kit)',
             textAlign: TextAlign.center,
             style: GoogleFonts.dmSans(
                 fontSize: 13, color: GradeFlowTheme.onSurfaceVariant)),
