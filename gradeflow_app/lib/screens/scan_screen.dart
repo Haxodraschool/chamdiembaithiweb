@@ -47,6 +47,7 @@ class _ScanScreenState extends State<ScanScreen> {
   final GlobalKey _pickersKey = GlobalKey();
 
   VoidCallback? _flowListener;
+  VoidCallback? _tabListener;
 
   @override
   void initState() {
@@ -54,7 +55,9 @@ class _ScanScreenState extends State<ScanScreen> {
     _selectedExam = widget.preselectedExam;
     _loadExams();
     _flowListener = _onFlowStepChanged;
+    _tabListener = _onTabChanged;
     TutorialFlow.instance.step.addListener(_flowListener!);
+    TutorialFlow.instance.activeTabIndex.addListener(_tabListener!);
     WidgetsBinding.instance.addPostFrameCallback((_) => _onFlowStepChanged());
   }
 
@@ -65,9 +68,20 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
+  void _onTabChanged() {
+    // When user switches to the "Chấm điểm" tab (index 2), refresh the exam
+    // dropdown so newly-created exams from elsewhere are visible.
+    if (TutorialFlow.instance.activeTabIndex.value == 2 && mounted) {
+      _loadExams();
+      _onFlowStepChanged();
+    }
+  }
+
   Future<void> _maybeShowCoachMarks() async {
     await Future.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
+    // Gate: must be on the Scan tab AND right step.
+    if (TutorialFlow.instance.activeTabIndex.value != 2) return;
     if (TutorialFlow.instance.step.value != TutorialFlow.stepScanScreen) return;
     await CoachMarkService.show(
       context: context,
@@ -107,6 +121,9 @@ class _ScanScreenState extends State<ScanScreen> {
   void dispose() {
     if (_flowListener != null) {
       TutorialFlow.instance.step.removeListener(_flowListener!);
+    }
+    if (_tabListener != null) {
+      TutorialFlow.instance.activeTabIndex.removeListener(_tabListener!);
     }
     _documentScanner?.close();
     super.dispose();

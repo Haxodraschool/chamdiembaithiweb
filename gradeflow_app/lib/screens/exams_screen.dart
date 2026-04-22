@@ -30,13 +30,16 @@ class _ExamsScreenState extends State<ExamsScreen> {
   final GlobalKey _manualBtnKey = GlobalKey();
 
   VoidCallback? _flowListener;
+  VoidCallback? _tabListener;
 
   @override
   void initState() {
     super.initState();
     _loadExams();
     _flowListener = _onFlowStepChanged;
+    _tabListener = _onTabChanged;
     TutorialFlow.instance.step.addListener(_flowListener!);
+    TutorialFlow.instance.activeTabIndex.addListener(_tabListener!);
     // Initial check (in case we are built after step was set).
     WidgetsBinding.instance.addPostFrameCallback((_) => _onFlowStepChanged());
   }
@@ -45,6 +48,9 @@ class _ExamsScreenState extends State<ExamsScreen> {
   void dispose() {
     if (_flowListener != null) {
       TutorialFlow.instance.step.removeListener(_flowListener!);
+    }
+    if (_tabListener != null) {
+      TutorialFlow.instance.activeTabIndex.removeListener(_tabListener!);
     }
     super.dispose();
   }
@@ -56,10 +62,21 @@ class _ExamsScreenState extends State<ExamsScreen> {
     }
   }
 
+  void _onTabChanged() {
+    // Refresh exam list when this tab becomes active (so newly-created exams
+    // from elsewhere show up).
+    if (TutorialFlow.instance.activeTabIndex.value == 1 && mounted) {
+      _loadExams();
+      // Also re-check tutorial step in case it changed while tab was hidden.
+      _onFlowStepChanged();
+    }
+  }
+
   Future<void> _showStep2CoachMark() async {
     await Future.delayed(const Duration(milliseconds: 400));
     if (!mounted) return;
-    // Still on right step?
+    // Gate: must be on the Exams tab AND on the right step.
+    if (TutorialFlow.instance.activeTabIndex.value != 1) return;
     if (TutorialFlow.instance.step.value != TutorialFlow.stepClickImport) {
       return;
     }

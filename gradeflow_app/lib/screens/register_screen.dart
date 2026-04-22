@@ -38,8 +38,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _firstNameCtrl.text.trim(),
       _lastNameCtrl.text.trim(),
     );
-    if (error != null && mounted) {
+    if (!mounted) return;
+    if (error != null) {
       setState(() => _error = error);
+    } else {
+      // Success — auth.isAuthenticated becomes true so MaterialApp.home rebuilds
+      // to MainShell, but the Register route is still pushed above. Pop back to
+      // root so user lands directly on the Dashboard.
+      Navigator.of(context).popUntil((route) => route.isFirst);
     }
   }
 

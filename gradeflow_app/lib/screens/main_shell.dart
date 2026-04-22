@@ -25,6 +25,7 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
+    TutorialFlow.instance.activeTabIndex.value = _currentIndex;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       context.read<AuthService>().refreshMe();
       await TutorialFlow.instance.load();
@@ -35,7 +36,11 @@ class _MainShellState extends State<MainShell> {
   void _maybeShowStep1() async {
     if (!mounted) return;
     if (TutorialFlow.instance.step.value != TutorialFlow.stepClickBaiThi) return;
+    if (_currentIndex != 0) return; // Only when Dashboard is active
     await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    // Mark as started so this never auto-shows again on future launches.
+    await TutorialFlow.instance.markStartedOnce();
     if (!mounted) return;
     await CoachMarkService.show(
       context: context,
@@ -101,6 +106,7 @@ class _MainShellState extends State<MainShell> {
       flow.setStep(TutorialFlow.stepScanScreen);
     }
     setState(() => _currentIndex = index);
+    flow.activeTabIndex.value = index;
 
     // When user returns to Exams tab after visiting Import screen
     if (index == 1 && flow.step.value == TutorialFlow.stepClickChamDiem) {
