@@ -43,9 +43,9 @@ NAME_REGION = (255, 300, 745, 60)
 # --- Tham số phát hiện bubble ---
 # Ngưỡng tỷ lệ pixel đen / tổng pixel trong vòng tròn
 # Bubble rỗng (viền) ~0.05-0.12 trên ảnh cleaned
-# Bubble đã tô        ~0.45-0.85
-# Chỉnh trong khoảng 0.28 - 0.45 tùy chất lượng in/scan
-FILL_THRESHOLD = 0.38
+# Bubble đã tô        ~0.25-0.85 (phone camera thấp hơn scan)
+# Chỉnh trong khoảng 0.22 - 0.38 tùy chất lượng in/scan/phone
+FILL_THRESHOLD = 0.28
 
 # Bán kính bubble (pixel trên ảnh warped, đo từ HoughCircles ~11-14)
 BUBBLE_RADIUS = 13
@@ -2100,45 +2100,65 @@ def _ocr_digit_from_box(gray_img, box):
 
 def _detect_filled_choices(ratios):
     """
-    Phát hiện bubble được tô — 2 pha:
+    Phát hiện bubble được tô — 3 phương pháp kết hợp:
 
-    Pha 1 (Absolute): raw > FILL_THRESHOLD (0.38)
-      → Dùng cho ảnh sạch, scan. Có thể detect nhiều → X.
-      → FILL_THRESHOLD cao (0.38) loại bỏ baseline inflate (~0.34).
+    Method 1 (TNMaker Relative): So sánh tương đối trong cùng câu.
+      → Port từ TNMaker a.java:840 — a() method.
+      → abs(top - second) > 0.1 VÀ abs(second - third) <= 0.2
+      → Hoạt động BẤT KỂ ánh sáng/contrast (phone hay scan đều OK).
 
-    Pha 2 (Adaptive): CHỈ chạy khi Pha 1 không tìm thấy gì.
-      → Trừ noise_floor (2nd smallest) → tìm bubble nổi trội nhất.
-      → Điều kiện: top_adj > 0.05 VÀ (top_adj - 2nd_adj) > 0.03
-      → Không bao giờ return nhiều → không gây false X.
+    Method 2 (Absolute): raw > FILL_THRESHOLD (0.28)
+      → Bắt thêm trường hợp tô nhiều bubble (→ X).
 
-    Tự thích ứng: scan sạch → Pha 1 xử lý. Phone nhạt → Pha 2 bắt.
+    Method 3 (Adaptive Noise Floor): Trừ noise rồi so sánh.
+      → Bắt bubble cực nhạt mà M1 + M2 đều miss.
+
+    Ưu tiên: M1 > M2 > M3.
     """
     if not ratios:
         return []
 
     vals = list(ratios.values())
-    if max(vals) < 0.12:
+    if max(vals) < 0.08:
         return []
 
-    # --- Pha 1: Absolute ---
+    # Sort by fill ratio descending (TNMaker style)
+    paired = sorted(ratios.items(), key=lambda x: x[1], reverse=True)
+    sorted_r = [p[1] for p in paired]
+
+    # --- Method 1: TNMaker Relative (a.java:840) ---
+    # Bubble đậm nhất phải NỔI BẬT hơn phần còn lại
+    if len(sorted_r) >= 3:
+        gap_top = abs(sorted_r[0] - sorted_r[1])      # top vs 2nd
+        gap_rest = abs(sorted_r[1] - sorted_r[2])      # 2nd vs 3rd
+        if gap_top > 0.1 and gap_rest <= 0.2:
+            # Kiểm tra xem có bubble thứ 2 cũng nổi bật không (tô 2 ô)
+            if len(sorted_r) >= 4:
+                gap_2nd = abs(sorted_r[1] - sorted_r[2])
+                gap_3rd = abs(sorted_r[2] - sorted_r[3])
+                if gap_2nd > 0.1 and gap_3rd <= 0.15:
+                    return [paired[0][0], paired[1][0]]  # Tô 2 ô → X
+            return [paired[0][0]]  # 1 bubble nổi bật → chọn
+    elif len(sorted_r) == 2:
+        if abs(sorted_r[0] - sorted_r[1]) > 0.1:
+            return [paired[0][0]]
+
+    # --- Method 2: Absolute threshold ---
     filled = [ch for ch, r in ratios.items() if r > FILL_THRESHOLD]
     if filled:
         if len(filled) == 1:
             return filled
-        # Pha 1b: Nhiều bubble vượt threshold → tìm dominant
-        # Trường hợp: 1 chấm nhỏ (~0.40) + 1 tô đậm (~0.60+)
-        # → chọn cái đậm nhất nếu gap đủ lớn
-        filled_ratios = sorted([(ch, ratios[ch]) for ch in filled],
+        # Nhiều bubble vượt threshold → tìm dominant
+        filled_sorted = sorted([(ch, ratios[ch]) for ch in filled],
                                key=lambda x: x[1], reverse=True)
-        top_ch, top_r = filled_ratios[0]
-        second_r = filled_ratios[1][1]
+        top_ch, top_r = filled_sorted[0]
+        second_r = filled_sorted[1][1]
         gap = top_r - second_r
-        # Dominant nếu: gap > 0.12 HOẶC top gấp >1.4x second
-        if gap > 0.12 or (second_r > 0 and top_r / second_r > 1.4):
-            return [top_ch]  # Chọn đáp án đậm nhất
+        if gap > 0.1 or (second_r > 0 and top_r / second_r > 1.5):
+            return [top_ch]
         return filled  # Thật sự tô nhiều → X
 
-    # --- Pha 2: Adaptive (chỉ khi Pha 1 trống) ---
+    # --- Method 3: Adaptive noise floor ---
     sorted_vals = sorted(vals)
     noise_floor = sorted_vals[1] if len(sorted_vals) >= 3 else sorted_vals[0]
 
@@ -2148,7 +2168,7 @@ def _detect_filled_choices(ratios):
     top_ch, top_adj = adjusted[0]
     second_adj = adjusted[1][1] if len(adjusted) > 1 else 0.0
 
-    if top_adj > 0.05 and (top_adj - second_adj) > 0.03:
+    if top_adj > 0.04 and (top_adj - second_adj) > 0.02:
         return [top_ch]
 
     return []

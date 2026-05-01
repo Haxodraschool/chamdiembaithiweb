@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -14,6 +13,7 @@ import '../services/auth_service.dart';
 import '../services/api_service.dart';
 import '../services/coach_mark_service.dart';
 import '../services/tutorial_flow.dart';
+import 'live_camera_screen.dart';
 
 class ExamImportScreen extends StatefulWidget {
   const ExamImportScreen({super.key});
@@ -40,8 +40,6 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
   String? _selectedTemplate;
   bool _saving = false;
 
-  // Document scanner
-  DocumentScanner? _documentScanner;
 
   // Coach mark targets (flow step 3)
   final GlobalKey _dropZoneKey = GlobalKey();
@@ -95,7 +93,6 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
     _titleCtrl.removeListener(_onTitleChanged);
     _titleCtrl.dispose();
     _subjectCtrl.dispose();
-    _documentScanner?.close();
     super.dispose();
   }
 
@@ -113,31 +110,21 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
     _uploadFile(file.bytes!, file.name, isImage: false);
   }
 
-  /// Launch Google ML Kit document scanner to scan answer sheet
+  /// Launch live camera to scan answer sheet
   Future<void> _scanAnswerSheet() async {
     if (!kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
          defaultTargetPlatform == TargetPlatform.iOS)) {
-      try {
-        _documentScanner ??= DocumentScanner(
-          options: DocumentScannerOptions(
-            documentFormat: DocumentFormat.jpeg,
-            mode: ScannerMode.full,
-            pageLimit: 1,
-            isGalleryImport: true,
-          ),
-        );
-        final result = await _documentScanner!.scanDocument();
-        final images = result.images;
-        if (images.isNotEmpty && mounted) {
-          final file = File(images.first);
-          final bytes = await file.readAsBytes();
-          final name = images.first.split('/').last;
-          _uploadFile(bytes, name, isImage: true);
-          return;
-        }
-      } catch (e) {
-        debugPrint('Document scanner error: $e');
+      final bytes = await Navigator.push<Uint8List>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const LiveCameraScreen(),
+        ),
+      );
+      if (bytes != null && mounted) {
+        final name = 'scan_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        _uploadFile(bytes, name, isImage: true);
+        return;
       }
     }
     // Fallback: use gallery picker for web/desktop

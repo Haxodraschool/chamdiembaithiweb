@@ -1,9 +1,7 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
@@ -14,6 +12,7 @@ import '../services/auth_service.dart';
 import '../services/api_service.dart';
 import '../services/training_uploader.dart';
 import 'grade_result_screen.dart';
+import 'live_camera_screen.dart';
 
 /// Batch scanning: scan multiple papers in one session, grade each automatically,
 /// and display all results in a list.
@@ -42,7 +41,6 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
   int _gradingDone = 0;
 
   final List<_BatchResult> _results = [];
-  DocumentScanner? _documentScanner;
 
   @override
   void initState() {
@@ -51,11 +49,6 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
     _loadExams();
   }
 
-  @override
-  void dispose() {
-    _documentScanner?.close();
-    super.dispose();
-  }
 
   Future<void> _loadExams() async {
     final auth = context.read<AuthService>();
@@ -75,9 +68,9 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
   }
 
   Future<void> _scanBatch() async {
-    if (!(defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS) ||
-        kIsWeb) {
+    if (kIsWeb ||
+        !(defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content:
@@ -87,35 +80,29 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
     }
 
     setState(() => _scanning = true);
+    int scanned = 0;
+
     try {
-      _documentScanner ??= DocumentScanner(
-        options: DocumentScannerOptions(
-          documentFormat: DocumentFormat.jpeg,
-          mode: ScannerMode.full,
-          pageLimit: 30, // up to 30 papers per session
-          isGalleryImport: false,
-        ),
-      );
-      final scanResult = await _documentScanner!.scanDocument();
-      final images = scanResult.images;
+      bool keepScanning = true;
+      while (keepScanning && mounted) {
+        // Open live camera for each paper
+        final bytes = await Navigator.push<Uint8List>(
+          context,
+          MaterialPageRoute(builder: (_) => const LiveCameraScreen()),
+        );
 
-      if (!mounted) return;
-      setState(() {
-        _scanning = false;
-        _gradingCount = images.length;
-        _gradingDone = 0;
-      });
+        if (bytes == null || !mounted) break; // User cancelled
+        scanned++;
 
-      if (images.isEmpty) return;
+        // Grade this scan
+        final fileName = 'batch_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        setState(() {
+          _gradingCount = scanned;
+          _gradingDone = scanned - 1;
+        });
 
-      final auth = context.read<AuthService>();
-      final api = ApiService(token: auth.token!);
-
-      for (final path in images) {
-        if (!mounted) break;
-        final file = File(path);
-        final bytes = await file.readAsBytes();
-        final fileName = path.split(Platform.pathSeparator).last;
+        final auth = context.read<AuthService>();
+        final api = ApiService(token: auth.token!);
 
         try {
           final result = await api.gradeImage(
@@ -132,7 +119,7 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
                       result: result,
                       imageBytes: bytes,
                       fileName: fileName));
-              _gradingDone++;
+              _gradingDone = scanned;
             });
             if (result.isCleanForTraining && auth.token != null) {
               TrainingUploader.instance.enqueue(
@@ -145,30 +132,54 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
           }
         } catch (e) {
           if (mounted) {
-            setState(() => _gradingDone++);
+            setState(() => _gradingDone = scanned);
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Lỗi chấm $fileName: $e')),
+              SnackBar(content: Text('Lỗi chấm phiếu $scanned: $e')),
             );
           }
         }
-      }
 
-      if (mounted) {
-        setState(() {
-          _gradingCount = 0;
-          _gradingDone = 0;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Đã chấm xong ${images.length} phiếu'),
-              backgroundColor: GradeFlowTheme.success),
+        // Ask to continue or finish
+        if (!mounted) break;
+        final more = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: Text('Đã quét $scanned phiếu'),
+            content: const Text('Quét tiếp hay hoàn tất?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Hoàn tất'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Quét tiếp'),
+              ),
+            ],
+          ),
         );
+        keepScanning = more == true;
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _scanning = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Lỗi quét: $e')),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _scanning = false;
+        _gradingCount = 0;
+        _gradingDone = 0;
+      });
+      if (scanned > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Đã chấm xong $scanned phiếu'),
+              backgroundColor: GradeFlowTheme.success),
         );
       }
     }

@@ -1,9 +1,7 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:provider/provider.dart';
@@ -18,6 +16,7 @@ import '../services/tutorial_flow.dart';
 import '../services/training_uploader.dart';
 import 'grade_result_screen.dart';
 import 'batch_scan_screen.dart';
+import 'live_camera_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   final Exam? preselectedExam;
@@ -38,8 +37,6 @@ class _ScanScreenState extends State<ScanScreen> {
 
   final _imagePicker = ImagePicker();
 
-  // ML Kit Document Scanner (Android/iOS only)
-  DocumentScanner? _documentScanner;
 
   // Coach mark targets
   final GlobalKey _examKey = GlobalKey();
@@ -109,7 +106,7 @@ class _ScanScreenState extends State<ScanScreen> {
           key: _scanKey,
           title: 'Bước 5b: Quét phiếu',
           description:
-              'Nhấn để mở Google ML Kit Scanner. Đưa camera vào phiếu, hệ thống tự cắt viền và nắn thẳng.',
+              'Nhấn để mở camera OMR. Hướng camera vào phiếu, hệ thống tự nhận diện 4 góc và chụp.',
           align: ContentAlign.bottom,
         ),
         CoachMarkService.buildTarget(
@@ -133,7 +130,6 @@ class _ScanScreenState extends State<ScanScreen> {
     if (_tabListener != null) {
       TutorialFlow.instance.activeTabIndex.removeListener(_tabListener!);
     }
-    _documentScanner?.close();
     super.dispose();
   }
 
@@ -155,33 +151,24 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
-  /// Launch document scanner (ML Kit on mobile, fallback on web/desktop)
+  /// Launch live camera with OMR corner detection
   Future<void> _scanDocument() async {
     if (!kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
          defaultTargetPlatform == TargetPlatform.iOS)) {
-      try {
-        _documentScanner ??= DocumentScanner(
-          options: DocumentScannerOptions(
-            documentFormat: DocumentFormat.jpeg,
-            mode: ScannerMode.full,
-            pageLimit: 1,
-            isGalleryImport: true,
-          ),
-        );
-        final result = await _documentScanner!.scanDocument();
-        final images = result.images;
-        if (images.isNotEmpty && mounted) {
-          final file = File(images.first);
-          final bytes = await file.readAsBytes();
-          setState(() {
-            _scannedFile = XFile(images.first);
-            _scannedBytes = bytes;
-          });
-          return;
-        }
-      } catch (e) {
-        debugPrint('Document scanner error: $e');
+      final bytes = await Navigator.push<Uint8List>(
+        context,
+        MaterialPageRoute(builder: (_) => const LiveCameraScreen()),
+      );
+      if (bytes != null && mounted) {
+        final ts = DateTime.now().millisecondsSinceEpoch;
+        setState(() {
+          _scannedFile = XFile('omr_$ts.jpg');
+          _scannedBytes = bytes;
+        });
+        // Auto-start grading — user already confirmed in LiveCameraScreen
+        _gradeImage();
+        return;
       }
     }
     // Fallback: use gallery picker
@@ -454,7 +441,7 @@ class _ScanScreenState extends State<ScanScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Quét phiếu sử dụng Google Document Scanner — tự động cắt, nắn thẳng và làm nét.',
+          'Quét phiếu bằng camera OMR — tự động nhận diện 4 góc phiếu và chấm điểm.',
           style: GoogleFonts.dmSans(
             fontSize: 12,
             color: GradeFlowTheme.onSurfaceVariant,
