@@ -24,6 +24,12 @@ class CornerMarker {
   const CornerMarker(this.quadrant, this.rect);
 }
 
+class _MarkerCandidate {
+  final Rect rect;
+  final double score; // Higher = more likely a real marker
+  const _MarkerCandidate(this.rect, this.score);
+}
+
 class LiveCameraScreen extends StatefulWidget {
   const LiveCameraScreen({super.key});
   @override
@@ -237,7 +243,7 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     }
   }
 
-  // ─── Full-frame corner detection (Azota-style) ───────────────
+  // ─── Full-frame corner detection (Azota-style, production-grade) ──
   List<CornerMarker> _detect(cv.Mat gray, int w, int h) {
     // Downsample for speed
     const targetW = 640;
@@ -245,13 +251,15 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     final targetH = (h * scale).toInt();
     final small = cv.resize(gray, (targetW, targetH));
 
-    // Pre-process
-    final blurred = cv.gaussianBlur(small, (5, 5), 2.0);
+    // Pre-process: histogram equalization + blur + adaptive threshold
+    final enhanced = cv.equalizeHist(small);
+    final blurred = cv.gaussianBlur(enhanced, (5, 5), 2.0);
     final thresh = cv.adaptiveThreshold(blurred, 255,
         cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 5.0);
 
-    final (contours, _) = cv.findContours(
-        thresh, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+    // Use RETR_TREE for hierarchy info (nested contours = more reliable marker)
+    final (contours, hierarchy) = cv.findContours(
+        thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
 
     // Find dark square-ish markers in the full frame
     final minSide = (targetW * 0.012).toInt();  // ~8px at 640w
@@ -259,7 +267,7 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     final minArea = minSide * minSide;
     final maxArea = maxSide * maxSide;
 
-    final candidates = <Rect>[];
+    final candidates = <_MarkerCandidate>[];
     for (int j = 0; j < contours.length; j++) {
       final cnt = contours[j];
       final area = cv.contourArea(cnt);
@@ -268,45 +276,75 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       final rect = cv.boundingRect(cnt);
       if (rect.width < minSide || rect.height < minSide) continue;
 
-      // Squareness
+      // 1) Squareness: aspect ratio close to 1.0
       final ratio = rect.width > rect.height
           ? rect.width / rect.height : rect.height / rect.width;
-      if (ratio > 1.4) continue;
+      if (ratio > 1.35) continue;
 
-      // Solidity: filled marker should have high non-zero ratio
+      // 2) Polygon approximation: real markers ≈ 4 vertices (square)
+      final peri = cv.arcLength(cnt, true);
+      final approx = cv.approxPolyDP(cnt, 0.04 * peri, true);
+      final nVertices = approx.length;
+      approx.dispose();
+      // Accept 4-8 vertices (slightly rounded squares still have 4-6)
+      if (nVertices < 4 || nVertices > 8) continue;
+
+      // 3) Solidity: contour area / bounding rect area (extent)
+      final rectArea = rect.width * rect.height;
+      final extent = area / rectArea;
+      if (extent < 0.6) continue;  // Square marker should fill >60% of bbox
+
+      // 4) Fill ratio: pixel density inside bounding rect
       final sub = thresh.region(rect);
       final nz = cv.countNonZero(sub);
-      final solidRatio = nz / (rect.width * rect.height);
+      final solidRatio = nz / rectArea;
       sub.dispose();
       if (solidRatio < 0.4) continue;
 
+      // 5) Hierarchy score: marker with child contour (border) = more reliable
+      double score = solidRatio + extent * 0.3;
+      try {
+        if (j < hierarchy.length) {
+          final h = hierarchy[j]; // Vec4i: [next, prev, firstChild, parent]
+          if (h.val3 >= 0) score += 0.2; // val3 = firstChild index
+        }
+      } catch (_) {}
+
       // Scale coordinates back to original frame
-      candidates.add(Rect.fromLTWH(
-        rect.x / scale, rect.y / scale,
-        rect.width / scale, rect.height / scale,
+      candidates.add(_MarkerCandidate(
+        Rect.fromLTWH(
+          rect.x / scale, rect.y / scale,
+          rect.width / scale, rect.height / scale,
+        ),
+        score,
       ));
     }
 
-    small.dispose(); blurred.dispose(); thresh.dispose();
+    small.dispose(); enhanced.dispose(); blurred.dispose(); thresh.dispose();
 
     if (candidates.length < 4) return [];
 
     // Classify into quadrants: TL, TR, BL, BR
-    final cx = w / 2.0, cy = h / 2.0;
-    final tls = candidates.where((r) => r.center.dx < cx && r.center.dy < cy).toList();
-    final trs = candidates.where((r) => r.center.dx >= cx && r.center.dy < cy).toList();
-    final bls = candidates.where((r) => r.center.dx < cx && r.center.dy >= cy).toList();
-    final brs = candidates.where((r) => r.center.dx >= cx && r.center.dy >= cy).toList();
+    final midX = w / 2.0, midY = h / 2.0;
+    final tls = candidates.where((c) => c.rect.center.dx < midX && c.rect.center.dy < midY).toList();
+    final trs = candidates.where((c) => c.rect.center.dx >= midX && c.rect.center.dy < midY).toList();
+    final bls = candidates.where((c) => c.rect.center.dx < midX && c.rect.center.dy >= midY).toList();
+    final brs = candidates.where((c) => c.rect.center.dx >= midX && c.rect.center.dy >= midY).toList();
 
-    // Pick the one closest to each corner
-    Rect? _pickCorner(List<Rect> rects, double tx, double ty) {
-      if (rects.isEmpty) return null;
-      rects.sort((a, b) {
-        final da = (a.center.dx - tx) * (a.center.dx - tx) + (a.center.dy - ty) * (a.center.dy - ty);
-        final db = (b.center.dx - tx) * (b.center.dx - tx) + (b.center.dy - ty) * (b.center.dy - ty);
+    // Pick best candidate per quadrant: highest score, then closest to corner
+    _MarkerCandidate? _pickCorner(List<_MarkerCandidate> cands, double tx, double ty) {
+      if (cands.isEmpty) return null;
+      cands.sort((a, b) {
+        // Primary: higher score wins (hierarchy bonus)
+        if ((a.score - b.score).abs() > 0.1) return b.score.compareTo(a.score);
+        // Secondary: closer to corner wins
+        final da = (a.rect.center.dx - tx) * (a.rect.center.dx - tx) +
+            (a.rect.center.dy - ty) * (a.rect.center.dy - ty);
+        final db = (b.rect.center.dx - tx) * (b.rect.center.dx - tx) +
+            (b.rect.center.dy - ty) * (b.rect.center.dy - ty);
         return da.compareTo(db);
       });
-      return rects.first;
+      return cands.first;
     }
 
     final tl = _pickCorner(tls, 0, 0);
@@ -315,10 +353,10 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     final br = _pickCorner(brs, w.toDouble(), h.toDouble());
 
     final out = <CornerMarker>[];
-    if (tl != null) out.add(CornerMarker(0, tl));
-    if (tr != null) out.add(CornerMarker(1, tr));
-    if (bl != null) out.add(CornerMarker(2, bl));
-    if (br != null) out.add(CornerMarker(3, br));
+    if (tl != null) out.add(CornerMarker(0, tl.rect));
+    if (tr != null) out.add(CornerMarker(1, tr.rect));
+    if (bl != null) out.add(CornerMarker(2, bl.rect));
+    if (br != null) out.add(CornerMarker(3, br.rect));
 
     // Size consistency check: reject if marker sizes vary too much
     if (out.length == 4) {

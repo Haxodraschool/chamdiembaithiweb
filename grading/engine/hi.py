@@ -1682,12 +1682,21 @@ def preprocess(warped, enhance_camera=None):
     if enhance_camera is None:
         enhance_camera = _is_phone_camera(gray_raw)
 
-    # --- Làm phẳng nền giấy (Illumination Flattening / Background Division) ---
-    bg_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (51, 51))
-    background = cv2.morphologyEx(gray_raw, cv2.MORPH_CLOSE, bg_kernel)
-    flat_gray = cv2.divide(gray_raw, background, scale=255)
+    # --- Làm phẳng nền giấy (Multi-scale Illumination Normalization) ---
+    # Pass 1: Large kernel — triệt tiêu shadow gradient lớn (đèn chiếu 1 góc)
+    if enhance_camera:
+        large_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (151, 151))
+        bg_large = cv2.morphologyEx(gray_raw, cv2.MORPH_CLOSE, large_kernel)
+        gray_norm = cv2.divide(gray_raw, bg_large, scale=255)
+    else:
+        gray_norm = gray_raw
 
-    # --- CLAHE — LUÔN BẬT (an toàn, tăng contrast cục bộ cho cả scan lẫn phone) ---
+    # Pass 2: Small kernel — triệt tiêu chênh lệch cục bộ (bóng tay, nếp gấp)
+    bg_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (51, 51))
+    background = cv2.morphologyEx(gray_norm, cv2.MORPH_CLOSE, bg_kernel)
+    flat_gray = cv2.divide(gray_norm, background, scale=255)
+
+    # --- CLAHE — LUÔN BẬT (tăng contrast cục bộ cho cả scan lẫn phone) ---
     clip_limit = 3.0 if enhance_camera else 2.0
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
     flat_gray = clahe.apply(flat_gray)
@@ -2139,20 +2148,18 @@ def _ocr_digit_from_box(gray_img, box):
 
 def _detect_filled_choices(ratios):
     """
-    Phát hiện bubble được tô — 3 phương pháp kết hợp:
+    Phát hiện bubble được tô — 3 phương pháp + cluster analysis.
 
-    Method 1 (TNMaker Relative): So sánh tương đối trong cùng câu.
-      → Port từ TNMaker a.java:840 — a() method.
-      → abs(top - second) > 0.1 VÀ abs(second - third) <= 0.2
-      → Hoạt động BẤT KỂ ánh sáng/contrast (phone hay scan đều OK).
+    QUAN TRỌNG: Phải detect CHÍNH XÁC số bubble tô:
+      - 0 bubble → "" (bỏ trống)
+      - 1 bubble → "A"/"B"/"C"/"D"
+      - 2+ bubble → "X" (tô nhiều, câu hỏng)
 
-    Method 2 (Absolute): raw > FILL_THRESHOLD (0.28)
-      → Bắt thêm trường hợp tô nhiều bubble (→ X).
-
-    Method 3 (Adaptive Noise Floor): Trừ noise rồi so sánh.
-      → Bắt bubble cực nhạt mà M1 + M2 đều miss.
-
-    Ưu tiên: M1 > M2 > M3.
+    Pipeline:
+    1) Cluster: Tìm "gap lớn nhất" trong dãy ratio → tách filled vs empty
+    2) TNMaker Relative: Xác nhận cluster bằng gap analysis
+    3) Absolute: Fallback cho ảnh sạch
+    4) Adaptive: Trừ noise floor cho ảnh nhạt
     """
     if not ratios:
         return []
@@ -2161,56 +2168,88 @@ def _detect_filled_choices(ratios):
     if max(vals) < 0.08:
         return []
 
-    # Sort by fill ratio descending (TNMaker style)
+    # Sort by fill ratio descending
     paired = sorted(ratios.items(), key=lambda x: x[1], reverse=True)
     sorted_r = [p[1] for p in paired]
+    n = len(sorted_r)
 
-    # --- Method 1: TNMaker Relative (a.java:840) ---
-    # Bubble đậm nhất phải NỔI BẬT hơn phần còn lại
-    if len(sorted_r) >= 3:
-        gap_top = abs(sorted_r[0] - sorted_r[1])      # top vs 2nd
-        gap_rest = abs(sorted_r[1] - sorted_r[2])      # 2nd vs 3rd
+    # ── CLUSTER ANALYSIS: Tìm gap lớn nhất để tách filled/empty ──
+    # Ý tưởng: bubble tô có ratio CAO HƠN HẲN bubble rỗng
+    # Gap lớn nhất giữa 2 bubble liên tiếp → ranh giới filled/empty
+    if n >= 2:
+        gaps = [(i, sorted_r[i] - sorted_r[i + 1]) for i in range(n - 1)]
+        best_gap_idx, best_gap = max(gaps, key=lambda x: x[1])
+
+        # Gap đủ lớn → tách thành 2 cụm
+        if best_gap > 0.08:
+            filled_cluster = [paired[i][0] for i in range(best_gap_idx + 1)]
+            filled_ratios = sorted_r[:best_gap_idx + 1]
+            empty_ratios = sorted_r[best_gap_idx + 1:]
+
+            # Kiểm tra: cụm filled phải thực sự nổi bật
+            filled_min = min(filled_ratios)
+            empty_max = max(empty_ratios) if empty_ratios else 0
+            separation = filled_min - empty_max
+
+            if separation > 0.05:
+                # Cụm filled tách biệt rõ ràng khỏi cụm empty
+                if len(filled_cluster) == 1:
+                    return filled_cluster
+                elif len(filled_cluster) >= 2:
+                    # Tô 2+ bubble → kiểm tra xem CÓ THẬT tô nhiều không
+                    # Nếu top HƠN HẲN second (1 tô đậm, 1 dính mực nhẹ) → chọn top
+                    inner_gap = filled_ratios[0] - filled_ratios[1]
+                    if inner_gap > 0.12 or (filled_ratios[1] > 0 and filled_ratios[0] / filled_ratios[1] > 1.5):
+                        return [paired[0][0]]  # 1 tô thật, còn lại dính mực
+                    logger.info(f"MULTI-BUBBLE: {filled_cluster} ratios={filled_ratios}")
+                    return filled_cluster  # Thật sự tô nhiều → X
+
+    # ── METHOD 1: TNMaker Relative (a.java:840) ──
+    if n >= 3:
+        gap_top = sorted_r[0] - sorted_r[1]
+        gap_rest = sorted_r[1] - sorted_r[2]
         if gap_top > 0.1 and gap_rest <= 0.2:
-            # Kiểm tra xem có bubble thứ 2 cũng nổi bật không (tô 2 ô)
-            if len(sorted_r) >= 4:
-                gap_2nd = abs(sorted_r[1] - sorted_r[2])
-                gap_3rd = abs(sorted_r[2] - sorted_r[3])
-                if gap_2nd > 0.1 and gap_3rd <= 0.15:
-                    return [paired[0][0], paired[1][0]]  # Tô 2 ô → X
-            return [paired[0][0]]  # 1 bubble nổi bật → chọn
-    elif len(sorted_r) == 2:
-        if abs(sorted_r[0] - sorted_r[1]) > 0.1:
+            return [paired[0][0]]
+    elif n == 2:
+        if sorted_r[0] - sorted_r[1] > 0.1:
             return [paired[0][0]]
 
-    # --- Method 2: Absolute threshold ---
+    # ── METHOD 2: Absolute threshold ──
     filled = [ch for ch, r in ratios.items() if r > FILL_THRESHOLD]
     if filled:
         if len(filled) == 1:
             return filled
-        # Nhiều bubble vượt threshold → tìm dominant
+        # Nhiều vượt threshold → check dominance
         filled_sorted = sorted([(ch, ratios[ch]) for ch in filled],
                                key=lambda x: x[1], reverse=True)
-        top_ch, top_r = filled_sorted[0]
+        top_r = filled_sorted[0][1]
         second_r = filled_sorted[1][1]
         gap = top_r - second_r
         if gap > 0.1 or (second_r > 0 and top_r / second_r > 1.5):
-            return [top_ch]
+            return [filled_sorted[0][0]]
         return filled  # Thật sự tô nhiều → X
 
-    # --- Method 3: Adaptive noise floor ---
+    # ── METHOD 3: Adaptive noise floor ──
     sorted_vals = sorted(vals)
     noise_floor = sorted_vals[1] if len(sorted_vals) >= 3 else sorted_vals[0]
-
     adjusted = [(ch, max(0.0, r - noise_floor)) for ch, r in ratios.items()]
     adjusted.sort(key=lambda x: x[1], reverse=True)
 
-    top_ch, top_adj = adjusted[0]
-    second_adj = adjusted[1][1] if len(adjusted) > 1 else 0.0
+    # Tìm tất cả bubble nổi bật sau trừ noise
+    significant = [(ch, adj) for ch, adj in adjusted if adj > 0.04]
+    if not significant:
+        return []
 
-    if top_adj > 0.04 and (top_adj - second_adj) > 0.02:
-        return [top_ch]
+    if len(significant) == 1:
+        return [significant[0][0]]
 
-    return []
+    # Nhiều bubble nổi bật → check gap giữa chúng
+    top_adj = significant[0][1]
+    second_adj = significant[1][1]
+    if (top_adj - second_adj) > 0.03:
+        return [significant[0][0]]  # Chỉ 1 thật sự nổi bật
+    # Cả 2 đều nổi bật → tô nhiều
+    return [s[0] for s in significant]
 
 
 def _pick_answer(filled_choices):
