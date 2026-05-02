@@ -1683,18 +1683,17 @@ def preprocess(warped, enhance_camera=None):
         enhance_camera = _is_phone_camera(gray_raw)
 
     # --- Làm phẳng nền giấy (Multi-scale Illumination Normalization) ---
-    # Pass 1: Large kernel — triệt tiêu shadow gradient lớn (đèn chiếu 1 góc)
+    # GaussianBlur thay morphologyEx: separable O(n*k) thay O(n*k²) → 100x nhanh hơn
+    # Pass 1: Large blur — triệt tiêu shadow gradient lớn (đèn chiếu 1 góc)
     if enhance_camera:
-        large_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (151, 151))
-        bg_large = cv2.morphologyEx(gray_raw, cv2.MORPH_CLOSE, large_kernel)
+        bg_large = cv2.GaussianBlur(gray_raw, (0, 0), sigmaX=50)
         gray_norm = cv2.divide(gray_raw, bg_large, scale=255)
     else:
         gray_norm = gray_raw
 
-    # Pass 2: Small kernel — triệt tiêu chênh lệch cục bộ (bóng tay, nếp gấp)
-    bg_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (51, 51))
-    background = cv2.morphologyEx(gray_norm, cv2.MORPH_CLOSE, bg_kernel)
-    flat_gray = cv2.divide(gray_norm, background, scale=255)
+    # Pass 2: Small blur — triệt tiêu chênh lệch cục bộ (bóng tay, nếp gấp)
+    bg_small = cv2.GaussianBlur(gray_norm, (0, 0), sigmaX=20)
+    flat_gray = cv2.divide(gray_norm, bg_small, scale=255)
 
     # --- CLAHE — LUÔN BẬT (tăng contrast cục bộ cho cả scan lẫn phone) ---
     clip_limit = 3.0 if enhance_camera else 2.0
