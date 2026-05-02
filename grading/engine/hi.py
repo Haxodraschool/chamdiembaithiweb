@@ -1638,40 +1638,79 @@ def erase_printed_text(warped_img):
 # ║   BƯỚC 3: TIỀN XỬ LÝ — 3 LỚP BẢO VỆ                              ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
-def preprocess(warped, enhance_camera=False):
+def _is_phone_camera(gray_img):
+    """Auto-detect if image is from phone camera (vs scanner).
+    Phone camera images typically have:
+    - Lower contrast (std dev of pixel values)
+    - Uneven illumination (high std dev of local means)
+    - More noise
+    """
+    h, w = gray_img.shape[:2]
+    std_val = float(np.std(gray_img))
+    # Tính variance cục bộ: chia ảnh thành grid 8x8, so sánh mean các block
+    block_h, block_w = h // 8, w // 8
+    means = []
+    for r in range(8):
+        for c in range(8):
+            block = gray_img[r*block_h:(r+1)*block_h, c*block_w:(c+1)*block_w]
+            means.append(float(np.mean(block)))
+    local_std = float(np.std(means))
+    # Phone camera: contrast thấp (std < 70) HOẶC ánh sáng không đều (local_std > 15)
+    is_phone = std_val < 70 or local_std > 15
+    logger.info(f"Image analysis: global_std={std_val:.1f}, local_std={local_std:.1f} → {'PHONE' if is_phone else 'SCAN'}")
+    return is_phone
+
+
+def preprocess(warped, enhance_camera=None):
     """
     Tiền xử lý: trả về ảnh xám (blur) cho detection.
 
-    Nâng cấp: Illumination Flattening (Làm phẳng ánh sáng)
-    - Giúp triệt tiêu bóng đổ và chênh lệch sáng tối giữa các vùng trên phiếu.
-    - Giúp bút chì nhạt trở nên nổi bật hơn sau khi chia cho nền.
+    Pipeline nâng cấp (giống Azota-level):
+    1) erase_printed_text (punch-hole)
+    2) Illumination Flattening (background division)
+    3) CLAHE — LUÔN BẬT (an toàn cho cả scan + phone, tăng contrast cục bộ)
+    4) Gaussian blur (giảm noise)
+    5) Adaptive threshold
+    6) Morphological closing + opening (lấp khe hở trong bubble + loại noise)
     """
     # --- LỚP 1: erase_printed_text (punch-hole) ---
     warped_clean = erase_printed_text(warped)
 
     gray_raw = cv2.cvtColor(warped_clean, cv2.COLOR_BGR2GRAY)
 
+    # Auto-detect phone camera nếu không chỉ định
+    if enhance_camera is None:
+        enhance_camera = _is_phone_camera(gray_raw)
+
     # --- Làm phẳng nền giấy (Illumination Flattening / Background Division) ---
-    # Dùng MORPH_CLOSE để ước lượng 'độ sáng của nền' (bỏ qua các vết mực/bút chì)
     bg_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (51, 51))
     background = cv2.morphologyEx(gray_raw, cv2.MORPH_CLOSE, bg_kernel)
-    
-    # Chia ảnh gốc cho nền để triệt tiêu chênh lệch ánh sáng cục bộ
-    # flat_gray = (gray_raw / background) * 255
     flat_gray = cv2.divide(gray_raw, background, scale=255)
 
-    # Tăng cường độ tương phản (Histogram Equalization nhẹ) nếu cần
-    if enhance_camera:
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        flat_gray = clahe.apply(flat_gray)
+    # --- CLAHE — LUÔN BẬT (an toàn, tăng contrast cục bộ cho cả scan lẫn phone) ---
+    clip_limit = 3.0 if enhance_camera else 2.0
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    flat_gray = clahe.apply(flat_gray)
 
-    gray = cv2.GaussianBlur(flat_gray, (5, 5), 0)
+    # --- Gaussian blur ---
+    blur_ksize = (5, 5) if enhance_camera else (5, 5)
+    gray = cv2.GaussianBlur(flat_gray, blur_ksize, 0)
 
-    # Binary CHỈ cho debug visualization
+    # --- Adaptive threshold ---
+    # Phone camera: block size lớn hơn, constant thấp hơn → nhạy hơn
+    block_size = 17 if enhance_camera else 15
+    thresh_c = 6 if enhance_camera else 8
     thresh = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, 15, 8
+        cv2.THRESH_BINARY_INV, block_size, thresh_c
     )
+
+    # --- Morphological closing: lấp khe hở nhỏ trong bubble tô nhạt ---
+    if enhance_camera:
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, close_kernel, iterations=1)
+
+    # --- Morphological opening: loại noise nhỏ (nét chữ in) ---
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
     )
@@ -2183,6 +2222,23 @@ def _pick_answer(filled_choices):
     return ""
 
 
+def _confidence_score(ratios):
+    """Compute confidence score (0.0–1.0) for the detected answer.
+    Based on the margin between top-1 and top-2 fill ratios.
+    High margin = high confidence. No margin = uncertain.
+    """
+    if not ratios:
+        return 0.0
+    vals = sorted(ratios.values(), reverse=True)
+    if len(vals) < 2:
+        return min(1.0, vals[0] * 2)
+    top, second = vals[0], vals[1]
+    margin = top - second
+    # Normalize: margin 0.3+ → confidence 1.0, margin 0 → confidence 0
+    conf = min(1.0, margin / 0.3)
+    return round(conf, 3)
+
+
 def _count_detected(answers_dict):
     """Count how many questions have a real answer (not '' or 'X')."""
     return sum(1 for a in answers_dict.values()
@@ -2221,17 +2277,22 @@ def extract_part1(cleaned_img, y_offset=0):
             details[q] = ratios
             filled_choices = _detect_filled_choices(ratios)
             ans = _pick_answer(filled_choices)
+            conf = _confidence_score(ratios)
             answers[q] = ans
 
-            # Debug: log fill ratios cho câu bị blank hoặc tất cả câu
+            # Debug: log fill ratios cho câu bị blank, uncertain, hoặc tất cả
             if ans in ("", "X"):
                 logger.warning(
                     f"P1 Q{q} BLANK: ratios={ratios}  "
                     f"max={max(ratios.values()):.3f}  "
-                    f"threshold={FILL_THRESHOLD}"
+                    f"threshold={FILL_THRESHOLD}  conf={conf}"
+                )
+            elif conf < 0.5:
+                logger.warning(
+                    f"P1 Q{q}={ans} LOW_CONF({conf:.2f}): ratios={ratios}"
                 )
             else:
-                logger.debug(f"P1 Q{q}={ans}: ratios={ratios}")
+                logger.debug(f"P1 Q{q}={ans} conf={conf}: ratios={ratios}")
 
     return answers, details
 
