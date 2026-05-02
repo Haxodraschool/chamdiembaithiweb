@@ -45,7 +45,7 @@ NAME_REGION = (255, 300, 745, 60)
 # Bubble rỗng (viền) ~0.05-0.12 trên ảnh cleaned
 # Bubble đã tô        ~0.25-0.85 (phone camera thấp hơn scan)
 # Chỉnh trong khoảng 0.22 - 0.38 tùy chất lượng in/scan/phone
-FILL_THRESHOLD = 0.28
+FILL_THRESHOLD = 0.22
 
 # Bán kính bubble (pixel trên ảnh warped, đo từ HoughCircles ~11-14)
 BUBBLE_RADIUS = 13
@@ -1690,7 +1690,7 @@ def preprocess(warped, enhance_camera=None, mode="fast"):
         gray = cv2.GaussianBlur(gray_raw, (5, 5), 0)
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 15, 8
+            cv2.THRESH_BINARY_INV, 15, 3  # Lower constant for pencil sensitivity
         )
         kernel = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
@@ -3057,13 +3057,14 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     blank_ratio = n_blank / max(1, n_total_p1)
 
     # Quyết định: REJECT nếu quá nhiều câu uncertain hoặc blank
+    # More lenient thresholds for pencil marks
     scan_quality = "OK"
-    if low_conf_ratio > 0.5 or blank_ratio > 0.6:
+    if low_conf_ratio > 0.7 or blank_ratio > 0.7:
         scan_quality = "REJECT_SCAN"
         print(f"\n  ⚠️ REJECT_SCAN: low_conf={n_low_conf}/{n_total_p1} ({low_conf_ratio:.0%}), "
               f"blank={n_blank}/{n_total_p1} ({blank_ratio:.0%}), avg_conf={avg_conf:.2f}")
         print(f"  → Khuyến nghị: Scan lại ảnh với ánh sáng tốt hơn")
-    elif low_conf_ratio > 0.3 or blank_ratio > 0.4:
+    elif low_conf_ratio > 0.5 or blank_ratio > 0.5:
         scan_quality = "LOW_QUALITY"
         print(f"\n  ⚠ LOW_QUALITY: low_conf={n_low_conf}/{n_total_p1}, "
               f"blank={n_blank}/{n_total_p1}, avg_conf={avg_conf:.2f}")
