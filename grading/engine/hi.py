@@ -1945,6 +1945,30 @@ def is_bubble_filled(gray_img, cx, cy, radius=BUBBLE_RADIUS,
     if ratio <= threshold:
         return False, ratio
 
+    # 4. Shape validation: circularity check (chống gạch chéo / viết chữ)
+    # Chỉ check khi ratio ở vùng ambiguous (0.15 - 0.45) — bubble rõ ràng skip
+    if check_circularity and 0.15 < ratio < 0.45:
+        # Binary threshold lõi bubble
+        _, bw = cv2.threshold(roi, int(local_white * 0.65), 255, cv2.THRESH_BINARY_INV)
+        bw_masked = cv2.bitwise_and(bw, bw, mask=bubble_mask)
+        # Tìm contour lớn nhất trong bubble
+        cnts, _ = cv2.findContours(bw_masked, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if cnts:
+            biggest = max(cnts, key=cv2.contourArea)
+            cnt_area = cv2.contourArea(biggest)
+            cnt_peri = cv2.arcLength(biggest, True)
+            if cnt_peri > 0:
+                circularity = 4 * np.pi * cnt_area / (cnt_peri * cnt_peri)
+                # Bubble tô tròn: circularity ~0.6-1.0
+                # Gạch chéo: circularity ~0.1-0.3
+                if circularity < 0.20:
+                    # Không tròn → có thể là gạch/chữ → giảm ratio
+                    ratio *= 0.5
+                    logger.debug(f"Low circularity {circularity:.2f} at ({cx},{cy}) → ratio halved to {ratio:.3f}")
+
+    if ratio <= threshold:
+        return False, ratio
+
     return True, ratio
 
 
@@ -2262,9 +2286,15 @@ def _pick_answer(filled_choices):
 
 
 def _confidence_score(ratios):
-    """Compute confidence score (0.0–1.0) for the detected answer.
-    Based on the margin between top-1 and top-2 fill ratios.
-    High margin = high confidence. No margin = uncertain.
+    """Compute 2D confidence score (0.0–1.0) for the detected answer.
+
+    Two factors:
+      1) Margin (w=0.6): top1 - top2 gap. Margin 0.3+ → 1.0
+      2) Absolute strength (w=0.4): top1 fill ratio. Ratio 0.5+ → 1.0
+
+    Prevents false confidence when:
+      - Both top bubbles are weak (top=0.15, second=0.10 → margin ok but too faint)
+      - One bubble dominates but very faintly
     """
     if not ratios:
         return 0.0
@@ -2272,9 +2302,13 @@ def _confidence_score(ratios):
     if len(vals) < 2:
         return min(1.0, vals[0] * 2)
     top, second = vals[0], vals[1]
+    # Factor 1: Margin
     margin = top - second
-    # Normalize: margin 0.3+ → confidence 1.0, margin 0 → confidence 0
-    conf = min(1.0, margin / 0.3)
+    margin_score = min(1.0, margin / 0.3)
+    # Factor 2: Absolute strength
+    abs_score = min(1.0, top / 0.5)
+    # Weighted combination
+    conf = 0.6 * margin_score + 0.4 * abs_score
     return round(conf, 3)
 
 
@@ -2973,6 +3007,34 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
     p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
 
+    # --- Global Quality Gate ---
+    # Tính confidence cho Part 1 (40 câu) — đủ data để đánh giá
+    p1_confidences = []
+    for q, ratios in p1_det.items():
+        p1_confidences.append(_confidence_score(ratios))
+
+    n_total_p1 = len(p1_confidences)
+    n_low_conf = sum(1 for c in p1_confidences if c < 0.4)
+    n_blank = sum(1 for a in p1_ans.values() if a == "")
+    avg_conf = sum(p1_confidences) / max(1, n_total_p1)
+
+    low_conf_ratio = n_low_conf / max(1, n_total_p1)
+    blank_ratio = n_blank / max(1, n_total_p1)
+
+    # Quyết định: REJECT nếu quá nhiều câu uncertain hoặc blank
+    scan_quality = "OK"
+    if low_conf_ratio > 0.5 or blank_ratio > 0.6:
+        scan_quality = "REJECT_SCAN"
+        print(f"\n  ⚠️ REJECT_SCAN: low_conf={n_low_conf}/{n_total_p1} ({low_conf_ratio:.0%}), "
+              f"blank={n_blank}/{n_total_p1} ({blank_ratio:.0%}), avg_conf={avg_conf:.2f}")
+        print(f"  → Khuyến nghị: Scan lại ảnh với ánh sáng tốt hơn")
+    elif low_conf_ratio > 0.3 or blank_ratio > 0.4:
+        scan_quality = "LOW_QUALITY"
+        print(f"\n  ⚠ LOW_QUALITY: low_conf={n_low_conf}/{n_total_p1}, "
+              f"blank={n_blank}/{n_total_p1}, avg_conf={avg_conf:.2f}")
+    else:
+        print(f"\n  ✓ Scan quality: OK (avg_conf={avg_conf:.2f}, low_conf={n_low_conf}/{n_total_p1})")
+
     # --- Retry với method khác nếu SBD hoặc Mã đề có '?' (VÔ HIỆU HÓA vì SBD/Made không bắt buộc) ---
     # sbd_has_q = '?' in str(sbd)
     # made_has_q = '?' in str(made)
@@ -3095,6 +3157,8 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         "detect_method": method if not pre_warped else "pre_warped",
         "offsets": offsets,
         "cnn_status": cnn_status,
+        "scan_quality": scan_quality,
+        "avg_confidence": round(avg_conf, 3),
     }
 
 

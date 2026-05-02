@@ -358,6 +358,47 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     if (bl != null) out.add(CornerMarker(2, bl.rect));
     if (br != null) out.add(CornerMarker(3, br.rect));
 
+    // ── 3-corner fallback: infer missing corner via parallelogram ──
+    // If exactly 3 corners detected, compute 4th: missing = p1 + p3 - p2
+    if (out.length == 3) {
+      final have = {for (final m in out) m.quadrant};
+      final missing = [0, 1, 2, 3].firstWhere((q) => !have.contains(q));
+      // Get the 3 detected corners' centers
+      final pts = {for (final m in out) m.quadrant: m.rect.center};
+      Offset? inferred;
+      // Parallelogram: opposite = a + c - b (diagonal completion)
+      // TL=0, TR=1, BL=2, BR=3
+      switch (missing) {
+        case 0: // missing TL = TR + BL - BR
+          inferred = Offset(pts[1]!.dx + pts[2]!.dx - pts[3]!.dx,
+                            pts[1]!.dy + pts[2]!.dy - pts[3]!.dy);
+          break;
+        case 1: // missing TR = TL + BR - BL
+          inferred = Offset(pts[0]!.dx + pts[3]!.dx - pts[2]!.dx,
+                            pts[0]!.dy + pts[3]!.dy - pts[2]!.dy);
+          break;
+        case 2: // missing BL = TL + BR - TR
+          inferred = Offset(pts[0]!.dx + pts[3]!.dx - pts[1]!.dx,
+                            pts[0]!.dy + pts[3]!.dy - pts[1]!.dy);
+          break;
+        case 3: // missing BR = TR + BL - TL
+          inferred = Offset(pts[1]!.dx + pts[2]!.dx - pts[0]!.dx,
+                            pts[1]!.dy + pts[2]!.dy - pts[0]!.dy);
+          break;
+      }
+      if (inferred != null &&
+          inferred.dx > 0 && inferred.dx < w &&
+          inferred.dy > 0 && inferred.dy < h) {
+        // Use average marker size for the inferred corner
+        final avgW = out.map((m) => m.rect.width).reduce((a, b) => a + b) / 3;
+        final avgH = out.map((m) => m.rect.height).reduce((a, b) => a + b) / 3;
+        out.add(CornerMarker(missing, Rect.fromCenter(
+          center: inferred, width: avgW, height: avgH,
+        )));
+        debugPrint('Inferred corner $missing at ${inferred.dx.toInt()},${inferred.dy.toInt()}');
+      }
+    }
+
     // Size consistency check: reject if marker sizes vary too much
     if (out.length == 4) {
       final areas = out.map((m) => m.rect.width * m.rect.height).toList();
