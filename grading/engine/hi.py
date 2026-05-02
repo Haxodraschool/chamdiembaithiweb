@@ -1661,17 +1661,20 @@ def _is_phone_camera(gray_img):
     return is_phone
 
 
-def preprocess(warped, enhance_camera=None):
+def preprocess(warped, enhance_camera=None, mode="fast"):
     """
     Tiền xử lý: trả về ảnh xám (blur) cho detection.
 
-    Pipeline nâng cấp (giống Azota-level):
+    mode="fast":  simple pipeline — adaptive threshold + opening (nhanh, đủ cho ảnh tốt)
+    mode="robust": full pipeline — multi-scale normalization + CLAHE + closing (chậm, cho ảnh khó)
+
+    Pipeline robust (giống Azota-level):
     1) erase_printed_text (punch-hole)
     2) Illumination Flattening (background division)
-    3) CLAHE — LUÔN BẬT (an toàn cho cả scan + phone, tăng contrast cục bộ)
+    3) CLAHE (tăng contrast cục bộ)
     4) Gaussian blur (giảm noise)
     5) Adaptive threshold
-    6) Morphological closing + opening (lấp khe hở trong bubble + loại noise)
+    6) Morphological closing + opening
     """
     # --- LỚP 1: erase_printed_text (punch-hole) ---
     warped_clean = erase_printed_text(warped)
@@ -1682,30 +1685,38 @@ def preprocess(warped, enhance_camera=None):
     if enhance_camera is None:
         enhance_camera = _is_phone_camera(gray_raw)
 
-    # --- Làm phẳng nền giấy (Multi-scale Illumination Normalization) ---
-    # GaussianBlur thay morphologyEx: separable O(n*k) thay O(n*k²) → 100x nhanh hơn
-    # Pass 1: Large blur — triệt tiêu shadow gradient lớn (đèn chiếu 1 góc)
+    if mode == "fast":
+        # ─── FAST MODE: minimal pipeline ───
+        gray = cv2.GaussianBlur(gray_raw, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 15, 8
+        )
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
+        )
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+        return gray, thresh, cleaned
+
+    # ─── ROBUST MODE: full pipeline ───
+    # Làm phẳng nền giấy (Multi-scale Illumination Normalization)
+    # GaussianBlur: separable O(n*k) thay O(n*k²) → nhanh
     if enhance_camera:
         bg_large = cv2.GaussianBlur(gray_raw, (0, 0), sigmaX=50)
         gray_norm = cv2.divide(gray_raw, bg_large, scale=255)
     else:
         gray_norm = gray_raw
 
-    # Pass 2: Small blur — triệt tiêu chênh lệch cục bộ (bóng tay, nếp gấp)
     bg_small = cv2.GaussianBlur(gray_norm, (0, 0), sigmaX=20)
     flat_gray = cv2.divide(gray_norm, bg_small, scale=255)
 
-    # --- CLAHE — LUÔN BẬT (tăng contrast cục bộ cho cả scan lẫn phone) ---
+    # CLAHE
     clip_limit = 3.0 if enhance_camera else 2.0
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
     flat_gray = clahe.apply(flat_gray)
 
-    # --- Gaussian blur ---
-    blur_ksize = (5, 5) if enhance_camera else (5, 5)
-    gray = cv2.GaussianBlur(flat_gray, blur_ksize, 0)
+    gray = cv2.GaussianBlur(flat_gray, (5, 5), 0)
 
-    # --- Adaptive threshold ---
-    # Phone camera: block size lớn hơn, constant thấp hơn → nhạy hơn
     block_size = 17 if enhance_camera else 15
     thresh_c = 6 if enhance_camera else 8
     thresh = cv2.adaptiveThreshold(
@@ -1713,12 +1724,10 @@ def preprocess(warped, enhance_camera=None):
         cv2.THRESH_BINARY_INV, block_size, thresh_c
     )
 
-    # --- Morphological closing: lấp khe hở nhỏ trong bubble tô nhạt ---
     if enhance_camera:
         close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, close_kernel, iterations=1)
 
-    # --- Morphological opening: loại noise nhỏ (nét chữ in) ---
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
     )
@@ -2974,10 +2983,12 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             print(f"[LỖI] {e}")
             return None
 
-    # --- Bước 3: Tiền xử lý ---
-    # Pipeline: erase_printed_text → auto-detect phone → illumination norm + CLAHE
-    gray, thresh, cleaned = preprocess(warped)
-    print("[OK] Grayscale detection (pencil-friendly)")
+    # --- Bước 3: Tiền xử lý (FAST → check → ROBUST nếu cần) ---
+    import time as _time
+    _t0 = _time.time()
+    preprocess_mode = "fast"
+    gray, thresh, cleaned = preprocess(warped, mode="fast")
+    print(f"[OK] Preprocess FAST ({_time.time()-_t0:.2f}s)")
 
     # --- Bước 3b: Detect marker offsets (bù ảnh phồng) ---
     offsets = detect_section_offsets(gray)
@@ -2992,19 +3003,44 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         offsets["part3"] = p3_offset
         print(f"[OK] Part3 offset (digits): {p3_offset:+d}px")
 
-    # --- Debug output (SAU khi có offsets để calibration chính xác) ---
+    # --- Bước 4-5: Đọc đáp án (FAST pass) ---
+    sbd, made, sbd_det = extract_sbd_made(gray)
+    p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+
+    # --- Hybrid Decision: check FAST confidence → retry ROBUST if needed ---
+    fast_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
+    fast_avg_conf = sum(fast_confs) / max(1, len(fast_confs))
+    fast_low = sum(1 for c in fast_confs if c < 0.4)
+    fast_blank = sum(1 for a in p1_ans.values() if a == "")
+
+    need_robust = (fast_low / max(1, len(fast_confs)) > 0.25 or
+                   fast_blank / max(1, len(fast_confs)) > 0.3)
+
+    if need_robust:
+        _t1 = _time.time()
+        preprocess_mode = "robust"
+        gray, thresh, cleaned = preprocess(warped, mode="robust")
+        print(f"[RETRY] FAST avg_conf={fast_avg_conf:.2f}, low={fast_low}, blank={fast_blank} → ROBUST ({_time.time()-_t1:.2f}s)")
+        # Re-detect with robust preprocessing
+        offsets = detect_section_offsets(gray)
+        p3_offset = detect_part3_offset_from_digits(gray)
+        if p3_offset is not None:
+            offsets["part3"] = p3_offset
+        sbd, made, sbd_det = extract_sbd_made(gray)
+        p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+    else:
+        print(f"[OK] FAST sufficient: avg_conf={fast_avg_conf:.2f}, low={fast_low}, blank={fast_blank}")
+
+    p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
+    p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
+
+    # --- Debug output ---
     if debug:
         cv2.imwrite(f"{base}_calibration.jpg", draw_bubble_grid(warped, offsets=offsets))
         cv2.imwrite(f"{base}_gray.jpg", gray)
         cv2.imwrite(f"{base}_thresh.jpg", thresh)
         cv2.imwrite(f"{base}_cleaned.jpg", cleaned)
         print(f"[DEBUG] Đã lưu: _calibration.jpg, _gray.jpg, _thresh.jpg, _cleaned.jpg")
-
-    # --- Bước 4-5: Đọc đáp án (dùng ảnh GRAYSCALE, không binary) ---
-    sbd, made, sbd_det = extract_sbd_made(gray)
-    p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
-    p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
-    p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
 
     # --- Global Quality Gate ---
     # Tính confidence cho Part 1 (40 câu) — đủ data để đánh giá
@@ -3158,6 +3194,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         "cnn_status": cnn_status,
         "scan_quality": scan_quality,
         "avg_confidence": round(avg_conf, 3),
+        "preprocess_mode": preprocess_mode,
     }
 
 

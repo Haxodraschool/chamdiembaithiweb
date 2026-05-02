@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:image/image.dart' as img;
 
 import '../config/api_config.dart';
 import '../models/exam.dart';
@@ -12,6 +13,23 @@ class ApiService {
   final String token;
 
   ApiService({required this.token});
+
+  /// Compress image for upload: resize to max 800px width, JPEG quality 75.
+  /// Reduces ~5MB → ~100-200KB → 10-30x faster upload.
+  static Uint8List _compressForUpload(Uint8List raw, {int maxWidth = 800, int quality = 75}) {
+    try {
+      final decoded = img.decodeImage(raw);
+      if (decoded == null) return raw;
+      // Only downscale if larger than maxWidth
+      final src = decoded.width > maxWidth
+          ? img.copyResize(decoded, width: maxWidth)
+          : decoded;
+      final jpeg = img.encodeJpg(src, quality: quality);
+      return Uint8List.fromList(jpeg);
+    } catch (_) {
+      return raw; // Fallback: send original if decode fails
+    }
+  }
 
   Map<String, String> get _headers => {
         'Authorization': 'Token $token',
@@ -249,14 +267,14 @@ class ApiService {
 
     request.headers['Authorization'] = 'Token $token';
 
-    // Attach image as bytes (works on web + mobile)
-    final ext = fileName.split('.').last.toLowerCase();
-    final mimeType = ext == 'png' ? 'image/png' : 'image/jpeg';
+    // Compress image before upload: 800px width, JPEG q75
+    // ~5MB → ~100-200KB → 10-30x faster upload
+    final compressed = _compressForUpload(imageBytes);
     request.files.add(http.MultipartFile.fromBytes(
       'image',
-      imageBytes,
-      filename: fileName,
-      contentType: MediaType.parse(mimeType),
+      compressed,
+      filename: 'scan.jpg',
+      contentType: MediaType.parse('image/jpeg'),
     ));
 
     if (examId != null) {

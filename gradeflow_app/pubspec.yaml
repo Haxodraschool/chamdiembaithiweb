@@ -30,6 +30,7 @@ dependencies:
   # Image handling
   image_picker: ^1.1.2
   image_cropper: ^8.0.2
+  image: ^4.2.0
   path_provider: ^2.1.4
 
   # File picker (for Excel import)
