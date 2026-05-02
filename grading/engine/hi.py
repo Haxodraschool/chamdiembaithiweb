@@ -45,7 +45,7 @@ NAME_REGION = (255, 300, 745, 60)
 # Bubble rỗng (viền) ~0.05-0.12 trên ảnh cleaned
 # Bubble đã tô        ~0.25-0.85 (phone camera thấp hơn scan)
 # Chỉnh trong khoảng 0.22 - 0.38 tùy chất lượng in/scan/phone
-FILL_THRESHOLD = 0.22
+FILL_THRESHOLD = 0.15
 
 # Bán kính bubble (pixel trên ảnh warped, đo từ HoughCircles ~11-14)
 BUBBLE_RADIUS = 13
@@ -1686,16 +1686,14 @@ def preprocess(warped, enhance_camera=None, mode="fast"):
         enhance_camera = _is_phone_camera(gray_raw)
 
     if mode == "fast":
-        # ─── FAST MODE: minimal pipeline ───
+        # ─── FAST MODE: Azota-style minimal pipeline ───
+        # Only adaptive threshold, no morphological cleanup (preserves light pencil)
         gray = cv2.GaussianBlur(gray_raw, (5, 5), 0)
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 15, 3  # Lower constant for pencil sensitivity
+            cv2.THRESH_BINARY_INV, 15, 3
         )
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
-        )
-        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+        cleaned = thresh  # No morphological opening
         return gray, thresh, cleaned
 
     # ─── ROBUST MODE: full pipeline ───
@@ -1738,73 +1736,17 @@ def preprocess(warped, enhance_camera=None, mode="fast"):
 
 def detect_section_offsets(gray):
     """
-    Detect ô vuông đen (■) trên ảnh warped để tính offset cục bộ.
+    Azota-style: fixed positions, no dynamic offset detection.
 
-    Mỗi section (Part I, II, III) có các ô vuông đen ở viền trên.
-    So sánh vị trí thực tế vs mong đợi → tính (dy) cho từng section.
-    Giúp xử lý ảnh bị phồng (paper bulge) mà 4-corner warp không fix được.
+    Dynamic offset detection is unreliable for many templates.
+    Use fixed template positions instead (like Azota).
 
-    Returns: dict {"part1": dy1, "part2": dy2, "part3": dy3}
+    Returns: dict {"part1": 0, "part2": 0, "part3": 0}
     """
-    h, w = gray.shape[:2]
-
-    # Vị trí MONG ĐỢI của markers (y, x) — ô vuông đen ở viền trên mỗi section
-    # Đo từ 2 ảnh mẫu warp chuẩn (te2.jpg + 30-04-06-TL)
-    EXPECTED_MARKERS = {
-        "part1": {"y": 600,  "xs": [350, 700]},
-        "part2": {"y": 1054, "xs": [350, 700, 1050]},
-        "part3": {"y": 1340, "xs": [233, 466, 700, 933, 1166]},
-    }
-
-    SEARCH_H = 60      # tìm kiếm ±60px theo y (phone bị lệch nhiều hơn)
-    SEARCH_W = 35      # tìm kiếm ±35px theo x
-
-    offsets = {"part1": 0, "part2": 0, "part3": 0}
-
-    for section, info in EXPECTED_MARKERS.items():
-        exp_y = info["y"]
-        xs = info["xs"]
-        detected_ys = []
-
-        for exp_x in xs:
-            # Crop vùng tìm kiếm
-            y1 = max(0, exp_y - SEARCH_H)
-            y2 = min(h, exp_y + SEARCH_H)
-            x1 = max(0, exp_x - SEARCH_W)
-            x2 = min(w, exp_x + SEARCH_W)
-            roi = gray[y1:y2, x1:x2]
-            if roi.size == 0:
-                continue
-
-            # Tìm ô vuông đen: threshold thấp (< 80 = rất tối)
-            _, binary = cv2.threshold(roi, 80, 255, cv2.THRESH_BINARY_INV)
-            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
-                                           cv2.CHAIN_APPROX_SIMPLE)
-
-            best_cy = None
-            best_score = 0
-            for cnt in contours:
-                area = cv2.contourArea(cnt)
-                # Ô vuông ~20x19 = ~350px², chấp nhận 80-500
-                if 80 < area < 500:
-                    x_c, y_c, cw, ch = cv2.boundingRect(cnt)
-                    # Phải gần vuông
-                    aspect = max(cw, ch) / max(min(cw, ch), 1)
-                    if aspect < 2.0:
-                        cy_abs = y1 + y_c + ch // 2
-                        if area > best_score:
-                            best_score = area
-                            best_cy = cy_abs
-
-            if best_cy is not None:
-                detected_ys.append(best_cy)
-
-        if detected_ys:
-            avg_y = sum(detected_ys) / len(detected_ys)
-            dy = avg_y - exp_y
-            offsets[section] = round(dy)
-
-    return offsets
+    # Disabled: dynamic offset detection causes grid misalignment
+    # Azota uses fixed template positions - we do the same
+    logger.info("Using fixed template positions (Azota-style) - offset detection disabled")
+    return {"part1": 0, "part2": 0, "part3": 0}
 
 
 def _cluster_1d(values, max_gap):
