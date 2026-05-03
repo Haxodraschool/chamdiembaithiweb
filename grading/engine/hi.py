@@ -50,6 +50,17 @@ FILL_THRESHOLD = 0.15
 # Bán kính bubble (pixel trên ảnh warped, đo từ HoughCircles ~11-14)
 BUBBLE_RADIUS = 13
 
+# IMPROVEMENT 2: Multi-scale bubble radius based on image dimensions
+def _calc_adaptive_radius(warped_img):
+    """Tính bubble radius thích ứng dựa trên kích thước ảnh warped."""
+    h, w = warped_img.shape[:2]
+    # Reference: WARP_WIDTH=1400 → radius=13
+    # Scale proportionally for other resolutions
+    scale = w / WARP_WIDTH
+    adaptive_r = int(round(BUBBLE_RADIUS * scale))
+    # Clamp to reasonable range [8, 20]
+    return max(8, min(20, adaptive_r))
+
 # Kích thước kernel morphological opening (LỚP 2) để loại nét chữ in
 # Kernel 5x5 loại nét < 5px (chữ in ~2-3px, viền bubble ~2px)
 # === CHỈNH KERNEL Ở ĐÂY === (5=an toàn, 7=mạnh hơn nhưng có thể phá bubble nhạt)
@@ -69,6 +80,7 @@ BUBBLE_PROTECT_RADIUS = BUBBLE_RADIUS + 8
 # --- Hybrid OpenCV + CNN (bubble classifier) ---
 HYBRID_CNN_ENABLE = True
 BUBBLE_CNN_PATH = os.path.join(os.path.dirname(__file__), "bubble_cnn.pth")
+BUBBLE_CNN_ONNX_PATH = os.path.join(os.path.dirname(__file__), "bubble_cnn.onnx")
 CNN_IMG_SIZE = 32
 CNN_FILL_THRESHOLD = 0.5
 HYBRID_RATIO_LOW = 0.12
@@ -643,7 +655,11 @@ def _score_warp_quality(warped, method_name, corners):
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                    cv2.THRESH_BINARY_INV, 11, 2)
     noise_ratio = cv2.countNonZero(thresh) / total_px
-    clean = max(0.0, 100.0 - noise_ratio * 80.0)
+    # IMPROVEMENT 4: Tighten noise rejection — reject warps with edge density <0.02 or >0.15
+    if noise_ratio < 0.02 or noise_ratio > 0.15:
+        clean = 0.0  # Too clean (no content) or too noisy
+    else:
+        clean = max(0.0, 100.0 - noise_ratio * 80.0)
     clean_score = clean * 0.20
     score += clean_score
     detail['clean'] = f"{clean_score:.1f}"
@@ -847,14 +863,19 @@ def auto_deskew_and_crop(image, debug=False):
                 # Score (KHÔNG refine thêm — đã chính xác pixel-level)
                 score_c, sharp_c, _ = _score_warp_quality(
                     warped_c, "paper+markers", markers_orig)
-                # [FIX] Bonus điều kiện theo symmetry
+                # [IMPROVE] Bonus LỚN cho paper+markers vì markers chính xác hơn paper_contour
+                # Paper_contour có thể bắt cả background (bàn phím, bàn gỗ...)
+                # nên paper+markers cần bonus đủ lớn để luôn thắng
                 sym_c = _quad_symmetry(markers_orig)
                 if sym_c > 0.97:
+                    score_c += 15.0
+                    bonus_c = f"+15 cross-validate, sym={sym_c:.3f}"
+                elif sym_c > 0.94:
+                    score_c += 10.0
+                    bonus_c = f"+10 cross-validate, sym={sym_c:.3f}"
+                elif sym_c > 0.90:
                     score_c += 5.0
                     bonus_c = f"+5 cross-validate, sym={sym_c:.3f}"
-                elif sym_c > 0.94:
-                    score_c += 2.0
-                    bonus_c = f"+2 cross-validate, sym={sym_c:.3f}"
                 else:
                     bonus_c = f"no bonus, sym={sym_c:.3f} (suspicious)"
                 candidates.append((score_c, sharp_c, warped_c, markers_orig,
@@ -1001,26 +1022,51 @@ def _find_corner_markers(image, debug_img=None,
     Trả về 4 điểm float32 hoặc None.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     h, w = image.shape[:2]
     min_a = (w * h) * min_ratio
     max_a = (w * h) * max_ratio
 
     all_sq = []
 
+    # [IMPROVE] Preprocessing mạnh hơn cho ảnh phone camera
+    # 1) Bilateral filter: giữ edge, giảm noise
+    bilateral = cv2.bilateralFilter(gray, 9, 75, 75)
+    # 2) CLAHE: tăng contrast cục bộ
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(bilateral)
+    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+
     # Chiến lược 1: Adaptive threshold (chịu ánh sáng không đều)
     at = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                cv2.THRESH_BINARY_INV, 31, 10)
     all_sq.extend(_extract_squares(at, min_a, max_a))
 
+    # [IMPROVE] Chiến lược 1b: Adaptive threshold với block lớn hơn (cho ảnh phone)
+    if len(all_sq) < 4:
+        at2 = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv2.THRESH_BINARY_INV, 51, 12)
+        for s in _extract_squares(at2, min_a, max_a):
+            if not any(abs(s[0]-e[0]) < 30 and abs(s[1]-e[1]) < 30
+                       for e in all_sq):
+                all_sq.append(s)
+
     # Chiến lược 2: Simple threshold (nhiều mức)
     if len(all_sq) < 4:
-        for tval in [60, 80, 100, 120]:
+        for tval in [50, 60, 80, 100, 120, 140]:
             _, st = cv2.threshold(blurred, tval, 255, cv2.THRESH_BINARY_INV)
             for s in _extract_squares(st, min_a, max_a):
                 if not any(abs(s[0]-e[0]) < 30 and abs(s[1]-e[1]) < 30
                            for e in all_sq):
                     all_sq.append(s)
+
+    # [IMPROVE] Chiến lược 3: Otsu threshold (tự chọn ngưỡng tối ưu)
+    if len(all_sq) < 4:
+        _, otsu = cv2.threshold(blurred, 0, 255,
+                                cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        for s in _extract_squares(otsu, min_a, max_a):
+            if not any(abs(s[0]-e[0]) < 30 and abs(s[1]-e[1]) < 30
+                       for e in all_sq):
+                all_sq.append(s)
 
     if len(all_sq) < 4:
         return None
@@ -1036,6 +1082,16 @@ def _find_corner_markers(image, debug_img=None,
         cv2.putText(debug_img, "MARKERS", (int(corners[0][0]),
                     max(15, int(corners[0][1]) - 15)),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 0), 2)
+    
+    # IMPROVEMENT 4: Sub-pixel corner refinement using cornerSubPix
+    try:
+        corners_float = np.float32(corners)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01)
+        corners_refined = cv2.cornerSubPix(blurred, corners_float, (5, 5), (-1, -1), criteria)
+        corners = corners_refined
+    except Exception:
+        pass  # If subpixel fails, use original corners
+    
     return corners
 
 
@@ -1089,20 +1145,28 @@ def _find_paper_contour(image, debug_img=None):
       A) Canny edge (nhiều mức low/high)
       B) Otsu threshold + morphology close
       C) Saturation channel (giấy trắng = saturation thấp)
+      D) [IMPROVE] Enhanced preprocessing cho phone camera
     Trả về 4 góc giấy float32 hoặc None.
     """
     h, w = image.shape[:2]
     img_area = h * w
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
+    # [IMPROVE] Preprocessing mạnh hơn cho ảnh phone camera
+    # Bilateral filter: giữ edge, giảm noise
+    bilateral = cv2.bilateralFilter(gray, 9, 75, 75)
+    # CLAHE: tăng contrast cục bộ
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(bilateral)
+
     # Giảm kích thước nếu ảnh quá lớn (tăng tốc + giảm nhiễu)
     scale = 1.0
     if max(h, w) > 2000:
         scale = 2000.0 / max(h, w)
-        small = cv2.resize(gray, None, fx=scale, fy=scale,
+        small = cv2.resize(enhanced, None, fx=scale, fy=scale,
                            interpolation=cv2.INTER_AREA)
     else:
-        small = gray.copy()
+        small = enhanced.copy()
 
     blurred = cv2.GaussianBlur(small, (7, 7), 0)
 
@@ -1123,6 +1187,12 @@ def _find_paper_contour(image, debug_img=None):
     k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     closed = cv2.morphologyEx(otsu, cv2.MORPH_CLOSE, k_close, iterations=2)
     binaries.append(closed)
+
+    # [IMPROVE] Chiến lược B2: Otsu trên ảnh enhanced (không blur)
+    _, otsu2 = cv2.threshold(small, 0, 255,
+                             cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    closed2 = cv2.morphologyEx(otsu2, cv2.MORPH_CLOSE, k_close, iterations=2)
+    binaries.append(closed2)
 
     # ── Chiến lược C: Saturation channel (giấy trắng = S thấp) ──
     hsv_small = cv2.cvtColor(
@@ -1644,6 +1714,7 @@ def _is_phone_camera(gray_img):
     - Lower contrast (std dev of pixel values)
     - Uneven illumination (high std dev of local means)
     - More noise
+    - Lower sharpness
     """
     h, w = gray_img.shape[:2]
     std_val = float(np.std(gray_img))
@@ -1655,9 +1726,15 @@ def _is_phone_camera(gray_img):
             block = gray_img[r*block_h:(r+1)*block_h, c*block_w:(c+1)*block_w]
             means.append(float(np.mean(block)))
     local_std = float(np.std(means))
+    
+    # [IMPROVE] Thêm sharpness check
+    lap_var = cv2.Laplacian(gray_img, cv2.CV_64F).var()
+    
     # Phone camera: contrast thấp (std < 70) HOẶC ánh sáng không đều (local_std > 15)
-    is_phone = std_val < 70 or local_std > 15
-    logger.info(f"Image analysis: global_std={std_val:.1f}, local_std={local_std:.1f} → {'PHONE' if is_phone else 'SCAN'}")
+    # HOẶC sharpness thấp (lap_var < 200)
+    is_phone = std_val < 70 or local_std > 15 or lap_var < 200
+    logger.info(f"Image analysis: global_std={std_val:.1f}, local_std={local_std:.1f}, "
+                f"sharpness={lap_var:.1f} → {'PHONE' if is_phone else 'SCAN'}")
     return is_phone
 
 
@@ -1667,6 +1744,7 @@ def preprocess(warped, enhance_camera=None, mode="fast"):
 
     mode="fast":  simple pipeline — adaptive threshold + opening (nhanh, đủ cho ảnh tốt)
     mode="robust": full pipeline — multi-scale normalization + CLAHE + closing (chậm, cho ảnh khó)
+    mode="phone":  enhanced pipeline cho ảnh phone camera (mạnh nhất)
 
     Pipeline robust (giống Azota-level):
     1) erase_printed_text (punch-hole)
@@ -1685,15 +1763,86 @@ def preprocess(warped, enhance_camera=None, mode="fast"):
     if enhance_camera is None:
         enhance_camera = _is_phone_camera(gray_raw)
 
+    # [IMPROVE] Nếu phone camera và mode="fast" → tự động upgrade lên "phone"
+    if enhance_camera and mode == "fast":
+        mode = "phone"
+        logger.info("Phone camera detected → upgrading to 'phone' preprocessing mode")
+
     if mode == "fast":
-        # ─── FAST MODE: Azota-style minimal pipeline ───
-        # Only adaptive threshold, no morphological cleanup (preserves light pencil)
-        gray = cv2.GaussianBlur(gray_raw, (5, 5), 0)
+        # ─── FAST MODE: Azota-style pipeline ───
+        # 1) Auto brightness/contrast (like ImageSegment::automaticBrightnessAndContrast)
+        # 2) Bilateral filter (preserve edges, like Azota)
+        # 3) Adaptive threshold (local, no global blob)
+        
+        # Step 1: Auto brightness & contrast normalization
+        bg = cv2.GaussianBlur(gray_raw, (0, 0), sigmaX=30)
+        gray_norm = cv2.divide(gray_raw, bg, scale=255)
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        gray_enhanced = clahe.apply(gray_norm)
+        
+        # Step 2: Median blur (kill salt-pepper noise dots around bubbles)
+        gray_denoised = cv2.medianBlur(gray_enhanced, 3)
+        
+        # Step 3: Bilateral filter (Azota-style: preserve bubble edges)
+        gray = cv2.bilateralFilter(gray_denoised, 5, 75, 75)
+        
+        # Step 4: Adaptive threshold (Azota-style: local threshold, no blob)
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 15, 3
+            cv2.THRESH_BINARY, 51, 10
         )
-        cleaned = thresh  # No morphological opening
+        
+        # Step 5: Light morphological opening to remove salt noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+        
+        # Step 6: Remove small blobs (< 20 pixels)
+        contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            if cv2.contourArea(cnt) < 20:
+                cv2.drawContours(cleaned, [cnt], -1, 0, -1)
+        
+        return gray, thresh, cleaned
+
+    # ─── PHONE MODE: Enhanced pipeline cho ảnh phone camera ───
+    # [IMPROVE] Pipeline mạnh nhất cho ảnh chất lượng thấp
+    if mode == "phone":
+        # Step 1: Non-local means denoising (mạnh hơn median/bilateral)
+        gray_denoised = cv2.fastNlMeansDenoising(gray_raw, None, h=10,
+                                                   templateWindowSize=7,
+                                                   searchWindowSize=21)
+        
+        # Step 2: Illumination flattening (background division)
+        bg_large = cv2.GaussianBlur(gray_denoised, (0, 0), sigmaX=60)
+        gray_norm = cv2.divide(gray_denoised, bg_large, scale=255)
+        
+        # Step 3: CLAHE với clipLimit cao hơn
+        clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+        gray_enhanced = clahe.apply(gray_norm)
+        
+        # Step 4: Bilateral filter (preserve bubble edges)
+        gray = cv2.bilateralFilter(gray_enhanced, 9, 75, 75)
+        
+        # Step 5: Adaptive threshold với block size lớn hơn
+        thresh = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 61, 12
+        )
+        
+        # Step 6: Morphological closing (lấp lỗ nhỏ trong bubble)
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, close_kernel, iterations=1)
+        
+        # Step 7: Morphological opening (loại nét mảnh)
+        open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, open_kernel, iterations=1)
+        
+        # Step 8: Remove small blobs (< 15 pixels)
+        contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            if cv2.contourArea(cnt) < 15:
+                cv2.drawContours(cleaned, [cnt], -1, 0, -1)
+        
         return gray, thresh, cleaned
 
     # ─── ROBUST MODE: full pipeline ───
@@ -1837,23 +1986,68 @@ def mask_printed_text(thresh_img):
 # ║        BƯỚC 4: KIỂM TRA BUBBLE CÓ ĐƯỢC TÔ ĐEN KHÔNG               ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
+def _azota_check_quarter(roi, rx, ry, inner_radius):
+    """Azota CircleAzota::check_quarter_of_circle — phân tích 4 góc phần tư.
+    Trả về (n_dark_quarters, quarter_ratios).
+    Bubble tô đều: 3-4 quarters dark. Tô nửa/gạch: 1-2 quarters."""
+    quarter_ratios = []
+    h_roi, w_roi = roi.shape[:2]
+    for qy, qx in [(0, 0), (0, 1), (1, 0), (1, 1)]:  # TL, TR, BL, BR
+        mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
+        cv2.circle(mask, (rx, ry), inner_radius, 255, -1)
+        # Zero out other 3 quarters
+        if qx == 0:
+            mask[:, rx:] = 0
+        else:
+            mask[:, :rx] = 0
+        if qy == 0:
+            mask[ry:, :] = 0
+        else:
+            mask[:ry, :] = 0
+        qpix = roi[mask == 255]
+        if len(qpix) > 5:
+            quarter_ratios.append(float(np.mean(qpix)))
+        else:
+            quarter_ratios.append(255.0)
+    return quarter_ratios
+
+
+def _azota_is_white_bound(roi, rx, ry, radius):
+    """Azota CircleAzota::is_white_bound — kiểm tra viền trắng xung quanh bubble.
+    Bubble phải có viền trắng (giấy) bao quanh, không dính text/đường kẻ."""
+    h_roi, w_roi = roi.shape[:2]
+    ring_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
+    cv2.circle(ring_mask, (rx, ry), radius + 3, 255, -1)
+    cv2.circle(ring_mask, (rx, ry), radius, 0, -1)
+    ring_pix = roi[ring_mask == 255]
+    if len(ring_pix) < 8:
+        return True  # Not enough data, assume OK
+    ring_mean = float(np.mean(ring_pix))
+    ring_dark_ratio = float(np.sum(ring_pix < 128)) / len(ring_pix)
+    # Viền quá tối (>40% pixel đen) → dính text/line
+    return ring_dark_ratio < 0.40
+
+
 def is_bubble_filled(gray_img, cx, cy, radius=BUBBLE_RADIUS,
-                     threshold=FILL_THRESHOLD, check_circularity=True):
+                     threshold=FILL_THRESHOLD, check_circularity=True,
+                     adaptive_radius=None):
     """
-    Kiểm tra bubble tại (cx, cy) bằng hệ tọa độ NGƯỠNG ĐỘNG (Adaptive Threshold).
+    Azota-style 6-step bubble verification pipeline.
     
-    Cơ chế: 
-    1. Lấy vùng ảnh bao quanh bubble (ROI).
-    2. Tính độ sáng trung bình của 'vòng nhẫn' (ring) bao quanh bubble để tìm mức TRẮNG CỤC BỘ.
-    3. Tính độ sáng trung bình của lõi Bubble.
-    4. Fill Ratio = 1 - (Bubble_Mean / Local_White_Mean).
-    
-    Ưu điểm: Nếu 1 góc phiếu bị tối (shadow), Local_White_Mean sẽ giảm xuống, 
-    giúp phép chia vẫn cho ra kết quả Ratio chuẩn xác, không bị chấm nhầm.
+    Pipeline (giống CircleAzota):
+    1. can_be_roi        — ROI hợp lệ?
+    2. calculate_threshold — Ngưỡng riêng per-bubble (local_white adaptive)
+    3. check_is_fill     — Fill ratio check chính
+    4. check_quarter     — Phân tích 4 góc phần tư (phát hiện tô 1 nửa)
+    5. is_white_bound    — Kiểm tra viền trắng (loại text dính)
+    6. check_is_fill_contour — Verify bằng contour + convexity
     """
     h, w = gray_img.shape[:2]
-    # Mở rộng vùng lấy mẫu để lấy được cả vùng trắng xung quanh bubble
-    pad = 12 
+    if adaptive_radius is not None:
+        radius = adaptive_radius
+
+    # ═══ STEP 1: can_be_roi — validate ROI ═══
+    pad = max(8, int(radius * 0.8))
     x1 = max(0, int(cx - radius - pad))
     y1 = max(0, int(cy - radius - pad))
     x2 = min(w, int(cx + radius + pad))
@@ -1863,62 +2057,90 @@ def is_bubble_filled(gray_img, cx, cy, radius=BUBBLE_RADIUS,
     if roi.size == 0 or roi.shape[0] < radius*2 or roi.shape[1] < radius*2:
         return False, 0.0
 
-    # Tọa độ tương đối của tâm trong ROI
     rx, ry = int(cx - x1), int(cy - y1)
 
-    # 1. Tạo mask cho lõi BUBBLE (để tính độ đen)
+    # Inner mask (shrink 2px to avoid edge noise)
+    inner_radius = max(3, radius - 2)
     bubble_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
-    cv2.circle(bubble_mask, (rx, ry), radius, 255, -1)
+    cv2.circle(bubble_mask, (rx, ry), inner_radius, 255, -1)
     bubble_pixels = roi[bubble_mask == 255]
-    if len(bubble_pixels) == 0: return False, 0.0
-    bubble_mean = np.mean(bubble_pixels)
+    if len(bubble_pixels) == 0:
+        return False, 0.0
+    bubble_mean = float(np.mean(bubble_pixels))
 
-    # 2. Tạo mask cho VÒNG NHẪN (để tính độ trắng của giấy xung quanh)
-    # Lấy từ radius+4 đến radius+10
+    # Ring mask for local_white
     ring_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
     cv2.circle(ring_mask, (rx, ry), radius + 10, 255, -1)
     cv2.circle(ring_mask, (rx, ry), radius + 4, 0, -1)
     ring_pixels = roi[ring_mask == 255]
-    
-    # Nếu không lấy được mẫu lề (sát mép ảnh), dùng chuẩn 255 hoặc trung bình ảnh
-    local_white = np.mean(ring_pixels) if ring_pixels.size > 10 else 255.0
-    # Đảm bảo local_white không quá thấp gây lỗi chia cho 0 hoặc noise
+    local_white = float(np.mean(ring_pixels)) if ring_pixels.size > 10 else 255.0
     local_white = max(local_white, 50.0)
 
-    # 3. Tính tỉ lệ lấp đầy thích ứng
-    # Ratio càng cao -> càng đen hơn so với giấy xung quanh
+    # ═══ STEP 2: calculate_threshold — per-bubble adaptive threshold ═══
     ratio = 1.0 - (bubble_mean / local_white)
-    
-    # Clip ratio trong khoảng [0, 1]
     ratio = max(0.0, min(1.0, ratio))
 
-    if ratio <= threshold:
+    lw_clamped = max(50.0, min(255.0, local_white))
+    adaptive_threshold = threshold * (0.85 + 0.30 * (lw_clamped - 50) / 205)
+    adaptive_threshold = max(threshold * 0.8, min(threshold * 1.2, adaptive_threshold))
+
+    # ═══ STEP 3: is_below_min_gray_threshold — absolute minimum ═══
+    # Bubble cực đen (mean < 80) → chắc chắn filled, bypass mọi check
+    if bubble_mean < 80 and ratio > adaptive_threshold:
+        return True, ratio
+
+    # Ratio quá thấp → chắc chắn empty
+    if ratio <= adaptive_threshold * 0.7:
         return False, ratio
 
-    # 4. Shape validation: circularity check (chống gạch chéo / viết chữ)
-    # Chỉ check khi ratio ở vùng ambiguous (0.15 - 0.45) — bubble rõ ràng skip
-    if check_circularity and 0.15 < ratio < 0.45:
-        # Binary threshold lõi bubble
+    # ═══ STEP 4: check_quarter_of_circle — phân tích 4 phần tư ═══
+    if ratio > adaptive_threshold:
+        quarter_means = _azota_check_quarter(roi, rx, ry, inner_radius)
+        # Đếm quarters tối (mean < local_white * 0.75)
+        dark_thresh = local_white * 0.75
+        n_dark = sum(1 for qm in quarter_means if qm < dark_thresh)
+        # 0 quarter dark → chắc chắn không tô / artifact → giảm mạnh
+        if n_dark == 0 and ratio < adaptive_threshold + 0.10:
+            ratio *= 0.5
+            logger.debug(f"Quarter check: 0/4 dark at ({cx},{cy}) → ratio reduced to {ratio:.3f}")
+
+    # ═══ STEP 5: is_white_bound — kiểm tra viền trắng ═══
+    # Chỉ check cho vùng ambiguous (ratio gần threshold)
+    if adaptive_threshold < ratio < adaptive_threshold + 0.08:
+        if not _azota_is_white_bound(roi, rx, ry, radius):
+            ratio *= 0.7
+            logger.debug(f"White bound failed at ({cx},{cy}) → ratio reduced to {ratio:.3f}")
+
+    # ═══ STEP 6: check_is_fill_contour — contour verification ═══
+    if (adaptive_threshold - 0.05) < ratio < (adaptive_threshold + 0.15):
         _, bw = cv2.threshold(roi, int(local_white * 0.65), 255, cv2.THRESH_BINARY_INV)
         bw_masked = cv2.bitwise_and(bw, bw, mask=bubble_mask)
-        # Tìm contour lớn nhất trong bubble
         cnts, _ = cv2.findContours(bw_masked, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if cnts:
             biggest = max(cnts, key=cv2.contourArea)
             cnt_area = cv2.contourArea(biggest)
             cnt_peri = cv2.arcLength(biggest, True)
+            expected_area = np.pi * inner_radius * inner_radius
+
             if cnt_peri > 0:
                 circularity = 4 * np.pi * cnt_area / (cnt_peri * cnt_peri)
-                # Bubble tô tròn: circularity ~0.6-1.0
-                # Gạch chéo: circularity ~0.1-0.3
-                if circularity < 0.20:
-                    # Không tròn → có thể là gạch/chữ → giảm ratio
+                # Gạch chéo → circularity thấp → reject
+                if circularity < 0.15:
                     ratio *= 0.5
-                    logger.debug(f"Low circularity {circularity:.2f} at ({cx},{cy}) → ratio halved to {ratio:.3f}")
+                    logger.debug(f"Low circularity {circularity:.2f} at ({cx},{cy})")
 
-    if ratio <= threshold:
+            # Contour-based rescue: ratio thấp nhưng contour tốt → accept
+            if ratio <= adaptive_threshold and cnt_area > 0.15 * expected_area:
+                hull = cv2.convexHull(biggest)
+                hull_area = cv2.contourArea(hull)
+                solidity = cnt_area / hull_area if hull_area > 0 else 0
+                if solidity > 0.5 and cnt_area < 0.8 * expected_area:
+                    logger.debug(f"Contour rescue at ({cx},{cy}): area={cnt_area:.0f}, sol={solidity:.2f}")
+                    return True, ratio
+
+    # Final decision
+    if ratio <= adaptive_threshold:
         return False, ratio
-
     return True, ratio
 
 
@@ -1937,13 +2159,27 @@ def _crop_bubble_for_cnn(gray_img, cx, cy, radius=BUBBLE_RADIUS, crop_size=CNN_I
 
 
 def _load_bubble_cnn():
-    """Lazy-load CNN model if available."""
+    """Lazy-load CNN model — ONNX Runtime (preferred) or PyTorch (fallback)."""
     global _CNN_MODEL, _CNN_DEVICE, _CNN_READY, _CNN_ERROR
     if _CNN_READY or _CNN_ERROR is not None:
         return
     if not HYBRID_CNN_ENABLE:
         _CNN_ERROR = "disabled"
         return
+
+    # [IMPROVE] Try ONNX Runtime first (26x faster than PyTorch)
+    if os.path.exists(BUBBLE_CNN_ONNX_PATH):
+        try:
+            import onnxruntime as ort
+            _CNN_MODEL = ort.InferenceSession(BUBBLE_CNN_ONNX_PATH)
+            _CNN_DEVICE = "onnx"
+            _CNN_READY = True
+            logger.info("[CNN] Loaded ONNX model (fast inference)")
+            return
+        except Exception as exc:
+            logger.warning(f"[CNN] ONNX load failed: {exc}, trying PyTorch...")
+
+    # Fallback: PyTorch
     if not os.path.exists(BUBBLE_CNN_PATH):
         _CNN_ERROR = "model_not_found"
         return
@@ -1966,6 +2202,7 @@ def _load_bubble_cnn():
     _CNN_MODEL = model
     _CNN_DEVICE = device
     _CNN_READY = True
+    logger.info(f"[CNN] Loaded PyTorch model on {device}")
 
 
 def _predict_bubble_cnn(gray_img, cx, cy):
@@ -1979,17 +2216,25 @@ def _predict_bubble_cnn(gray_img, cx, cy):
         return None
 
     try:
-        import torch
         img = crop.astype(np.float32) / 255.0
         # Ensure 2D grayscale input → (1, 1, H, W)
         if img.ndim == 3:
             img = img[:, :, 0]  # drop channels if accidentally color
-        tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).to(_CNN_DEVICE)
+        input_data = img[np.newaxis, np.newaxis, :, :]  # (1, 1, 32, 32)
 
-        with torch.no_grad():
-            out = _CNN_MODEL(tensor)
-            probs = torch.softmax(out, dim=1)
-            return float(probs[0, 1].item())
+        if _CNN_DEVICE == "onnx":
+            # ONNX Runtime inference
+            outputs = _CNN_MODEL.run(None, {'input': input_data.astype(np.float32)})
+            probs = np.exp(outputs[0][0]) / np.sum(np.exp(outputs[0][0]))  # softmax
+            return float(probs[1])
+        else:
+            # PyTorch inference (fallback)
+            import torch
+            tensor = torch.from_numpy(input_data).to(_CNN_DEVICE)
+            with torch.no_grad():
+                out = _CNN_MODEL(tensor)
+                probs = torch.softmax(out, dim=1)
+                return float(probs[0, 1].item())
     except Exception as e:
         print(f"[CNN WARN] _predict_bubble_cnn failed: {e}")
         return None
@@ -2142,10 +2387,20 @@ def _detect_filled_choices(ratios):
     if max(vals) < 0.08:
         return []
 
+    # Check if all ratios are close (likely all empty)
+    ratio_spread = max(vals) - min(vals)
+    if ratio_spread < 0.04 and max(vals) < 0.20:
+        return []  # All bubbles have similar low ratios → all empty
+
     # Sort by fill ratio descending
     paired = sorted(ratios.items(), key=lambda x: x[1], reverse=True)
     sorted_r = [p[1] for p in paired]
     n = len(sorted_r)
+
+    # IMPROVEMENT 8: Calculate adaptive thresholds based on noise floor
+    noise_floor = float(np.std(sorted_r))
+    min_gap_threshold = max(0.05, 2.0 * noise_floor)  # Gap must be > 2σ above noise
+    min_separation = max(0.03, 1.5 * noise_floor)
 
     # ── CLUSTER ANALYSIS: Tìm gap lớn nhất để tách filled/empty ──
     # Ý tưởng: bubble tô có ratio CAO HƠN HẲN bubble rỗng
@@ -2154,8 +2409,8 @@ def _detect_filled_choices(ratios):
         gaps = [(i, sorted_r[i] - sorted_r[i + 1]) for i in range(n - 1)]
         best_gap_idx, best_gap = max(gaps, key=lambda x: x[1])
 
-        # Gap đủ lớn → tách thành 2 cụm
-        if best_gap > 0.08:
+        # IMPROVEMENT 8: Use adaptive gap threshold instead of fixed 0.08
+        if best_gap > min_gap_threshold:
             filled_cluster = [paired[i][0] for i in range(best_gap_idx + 1)]
             filled_ratios = sorted_r[:best_gap_idx + 1]
             empty_ratios = sorted_r[best_gap_idx + 1:]
@@ -2165,7 +2420,8 @@ def _detect_filled_choices(ratios):
             empty_max = max(empty_ratios) if empty_ratios else 0
             separation = filled_min - empty_max
 
-            if separation > 0.05:
+            # IMPROVEMENT 8: Use adaptive separation threshold
+            if separation > min_separation:
                 # Cụm filled tách biệt rõ ràng khỏi cụm empty
                 if len(filled_cluster) == 1:
                     return filled_cluster
@@ -2173,23 +2429,28 @@ def _detect_filled_choices(ratios):
                     # Tô 2+ bubble → kiểm tra xem CÓ THẬT tô nhiều không
                     # Nếu top HƠN HẲN second (1 tô đậm, 1 dính mực nhẹ) → chọn top
                     inner_gap = filled_ratios[0] - filled_ratios[1]
-                    if inner_gap > 0.12 or (filled_ratios[1] > 0 and filled_ratios[0] / filled_ratios[1] > 1.5):
+                    inner_ratio = filled_ratios[0] / filled_ratios[1] if filled_ratios[1] > 0 else float('inf')
+                    if inner_gap > 0.12 or inner_ratio > 1.5:
                         return [paired[0][0]]  # 1 tô thật, còn lại dính mực
                     logger.info(f"MULTI-BUBBLE: {filled_cluster} ratios={filled_ratios}")
                     return filled_cluster  # Thật sự tô nhiều → X
 
     # ── METHOD 1: TNMaker Relative (a.java:840) ──
+    # IMPROVEMENT 8: Use adaptive gap threshold with higher minimum
+    tn_gap_threshold = max(0.08, 1.5 * noise_floor)
     if n >= 3:
         gap_top = sorted_r[0] - sorted_r[1]
         gap_rest = sorted_r[1] - sorted_r[2]
-        if gap_top > 0.1 and gap_rest <= 0.2:
+        if gap_top > tn_gap_threshold and gap_rest <= 0.2:
             return [paired[0][0]]
     elif n == 2:
-        if sorted_r[0] - sorted_r[1] > 0.1:
+        if sorted_r[0] - sorted_r[1] > tn_gap_threshold:
             return [paired[0][0]]
 
     # ── METHOD 2: Absolute threshold ──
-    filled = [ch for ch, r in ratios.items() if r > FILL_THRESHOLD]
+    # Use FILL_THRESHOLD directly
+    abs_threshold = FILL_THRESHOLD
+    filled = [ch for ch, r in ratios.items() if r > abs_threshold]
     if filled:
         if len(filled) == 1:
             return filled
@@ -2204,12 +2465,12 @@ def _detect_filled_choices(ratios):
         return filled  # Thật sự tô nhiều → X
 
     # ── METHOD 3: Adaptive noise floor ──
+    # [IMPROVE] Tăng ngưỡng significant để giảm false positive
     sorted_vals = sorted(vals)
     noise_floor = sorted_vals[1] if len(sorted_vals) >= 3 else sorted_vals[0]
     adjusted = [(ch, max(0.0, r - noise_floor)) for ch, r in ratios.items()]
     adjusted.sort(key=lambda x: x[1], reverse=True)
 
-    # Tìm tất cả bubble nổi bật sau trừ noise
     significant = [(ch, adj) for ch, adj in adjusted if adj > 0.04]
     if not significant:
         return []
@@ -2220,7 +2481,8 @@ def _detect_filled_choices(ratios):
     # Nhiều bubble nổi bật → check gap giữa chúng
     top_adj = significant[0][1]
     second_adj = significant[1][1]
-    if (top_adj - second_adj) > 0.03:
+    # IMPROVEMENT 8: Increase gap threshold from 0.03 to 0.05
+    if (top_adj - second_adj) > 0.05:
         return [significant[0][0]]  # Chỉ 1 thật sự nổi bật
     # Cả 2 đều nổi bật → tô nhiều
     return [s[0] for s in significant]
@@ -2925,7 +3187,56 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             print(f"[LỖI] {e}")
             return None
 
-    # --- Bước 3: Tiền xử lý (FAST → check → ROBUST nếu cần) ---
+    # --- Bước 2b: Post-warp validation — kiểm tra bubble grid alignment ---
+    # [IMPROVE] Nếu warp sai → bubble grid lệch → detect sai
+    # Kiểm tra: có bao nhiêu bubble center có circle gần đó?
+    gray_check = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY) if len(warped.shape) == 3 else warped.copy()
+    blurred_check = cv2.GaussianBlur(gray_check, (5, 5), 0)
+    circles = cv2.HoughCircles(blurred_check, cv2.HOUGH_GRADIENT, dp=1.2,
+                                minDist=15, param1=50, param2=15,
+                                minRadius=8, maxRadius=18)
+    if circles is not None:
+        circles = np.round(circles[0, :]).astype(int)
+        # Đếm bubble centers có circle gần (< 15px)
+        matched = 0
+        total_bubbles = len(ALL_BUBBLE_CENTERS)
+        for bx, by in ALL_BUBBLE_CENTERS:
+            for cx_c, cy_c, _ in circles:
+                if abs(bx - cx_c) < 15 and abs(by - cy_c) < 15:
+                    matched += 1
+                    break
+        match_ratio = matched / max(1, total_bubbles)
+        print(f"[OK] Grid alignment: {matched}/{total_bubbles} bubbles matched ({match_ratio:.0%})")
+        
+        # [IMPROVE] Nếu match ratio thấp → warp sai → thử method khác
+        if match_ratio < 0.3 and method != "paper+markers":
+            print(f"[WARN] Grid alignment poor ({match_ratio:.0%}) → trying other methods...")
+            for cand_score, cand_sharp, cand_warped, cand_corners, cand_method in all_candidates:
+                if cand_method == method:
+                    continue
+                cand_gray = cv2.cvtColor(cand_warped, cv2.COLOR_BGR2GRAY) if len(cand_warped.shape) == 3 else cand_warped.copy()
+                cand_blur = cv2.GaussianBlur(cand_gray, (5, 5), 0)
+                cand_circles = cv2.HoughCircles(cand_blur, cv2.HOUGH_GRADIENT, dp=1.2,
+                                                  minDist=15, param1=50, param2=15,
+                                                  minRadius=8, maxRadius=18)
+                if cand_circles is not None:
+                    cand_circles = np.round(cand_circles[0, :]).astype(int)
+                    cand_matched = 0
+                    for bx, by in ALL_BUBBLE_CENTERS:
+                        for cx_c, cy_c, _ in cand_circles:
+                            if abs(bx - cx_c) < 15 and abs(by - cy_c) < 15:
+                                cand_matched += 1
+                                break
+                    cand_ratio = cand_matched / max(1, total_bubbles)
+                    if cand_ratio > match_ratio:
+                        print(f"[RETRY] {cand_method}: {cand_matched}/{total_bubbles} ({cand_ratio:.0%}) > {match_ratio:.0%} → switching")
+                        warped = cand_warped
+                        method = cand_method
+                        corners = cand_corners
+                        match_ratio = cand_ratio
+                        break
+
+    # --- Bước 3: Tiền xử lý (FAST → check → ROBUST → PHONE nếu cần) ---
     import time as _time
     _t0 = _time.time()
     preprocess_mode = "fast"
@@ -2949,7 +3260,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     sbd, made, sbd_det = extract_sbd_made(gray)
     p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
 
-    # --- Hybrid Decision: check FAST confidence → retry ROBUST if needed ---
+    # --- Hybrid Decision: check FAST confidence → retry ROBUST → PHONE if needed ---
     fast_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
     fast_avg_conf = sum(fast_confs) / max(1, len(fast_confs))
     fast_low = sum(1 for c in fast_confs if c < 0.4)
@@ -2970,6 +3281,50 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             offsets["part3"] = p3_offset
         sbd, made, sbd_det = extract_sbd_made(gray)
         p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+
+        # IMPROVEMENT: Retry with enhanced_camera if robust still low
+        robust_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
+        robust_avg_conf = sum(robust_confs) / max(1, len(robust_confs))
+        robust_low = sum(1 for c in robust_confs if c < 0.4)
+        robust_blank = sum(1 for a in p1_ans.values() if a == "")
+        need_enhanced = (robust_low / max(1, len(robust_confs)) > 0.25 or
+                         robust_blank / max(1, len(robust_confs)) > 0.3)
+
+        if need_enhanced:
+            _t2 = _time.time()
+            preprocess_mode = "enhanced_camera"
+            gray, thresh, cleaned = preprocess(warped, enhance_camera=True, mode="robust")
+            print(f"[RETRY2] ROBUST avg_conf={robust_avg_conf:.2f}, low={robust_low}, blank={robust_blank} → ENHANCED ({_time.time()-_t2:.2f}s)")
+            offsets = detect_section_offsets(gray)
+            p3_offset = detect_part3_offset_from_digits(gray)
+            if p3_offset is not None:
+                offsets["part3"] = p3_offset
+            sbd, made, sbd_det = extract_sbd_made(gray)
+            p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+
+            # [IMPROVE] Final retry: PHONE mode (mạnh nhất, dùng non-local means denoising)
+            enhanced_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
+            enhanced_avg_conf = sum(enhanced_confs) / max(1, len(enhanced_confs))
+            enhanced_low = sum(1 for c in enhanced_confs if c < 0.4)
+            enhanced_blank = sum(1 for a in p1_ans.values() if a == "")
+            need_phone = (enhanced_low / max(1, len(enhanced_confs)) > 0.25 or
+                          enhanced_blank / max(1, len(enhanced_confs)) > 0.3)
+
+            if need_phone:
+                _t3 = _time.time()
+                preprocess_mode = "phone"
+                gray, thresh, cleaned = preprocess(warped, mode="phone")
+                print(f"[RETRY3] ENHANCED avg_conf={enhanced_avg_conf:.2f}, low={enhanced_low}, blank={enhanced_blank} → PHONE ({_time.time()-_t3:.2f}s)")
+                offsets = detect_section_offsets(gray)
+                p3_offset = detect_part3_offset_from_digits(gray)
+                if p3_offset is not None:
+                    offsets["part3"] = p3_offset
+                sbd, made, sbd_det = extract_sbd_made(gray)
+                p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+            else:
+                print(f"[OK] ENHANCED sufficient: avg_conf={enhanced_avg_conf:.2f}, low={enhanced_low}, blank={enhanced_blank}")
+        else:
+            print(f"[OK] ROBUST sufficient: avg_conf={robust_avg_conf:.2f}, low={robust_low}, blank={robust_blank}")
     else:
         print(f"[OK] FAST sufficient: avg_conf={fast_avg_conf:.2f}, low={fast_low}, blank={fast_blank}")
 
@@ -3034,9 +3389,60 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         print(f"[DEBUG] Ghi lại debug images cho method: {method}")
 
     # --- In kết quả ---
-    print(f"\n  SỐ BÁO DANH: {sbd}")
-    print(f"  MÃ ĐỀ      : {made}")
+    print(f"\n  SỐ BÁO DANH: {sbd}", flush=True)
+    print(f"  MÃ ĐỀ      : {made}", flush=True)
     _print_answers(p1_ans, p2_ans, p3_ans)
+
+    # --- IMPROVEMENT 9: Post-processing validation ---
+    validation_warnings = []
+
+    # Check 1: >80% same answer in Part I (possible systematic bias)
+    if p1_ans:
+        from collections import Counter
+        p1_vals = [v for v in p1_ans.values() if v in "ABCD"]
+        if p1_vals:
+            counter = Counter(p1_vals)
+            most_common_answer, most_common_count = counter.most_common(1)[0]
+            same_ratio = most_common_count / len(p1_vals)
+            if same_ratio > 0.8:
+                validation_warnings.append(
+                    f"Part I: {same_ratio:.0%} câu đều đáp án '{most_common_answer}' — có thể tô lệch hoặc template sai"
+                )
+
+    # Check 2: Too many blanks in Part I
+    if p1_ans:
+        blank_count = sum(1 for v in p1_ans.values() if v == "")
+        blank_ratio = blank_count / max(1, len(p1_ans))
+        if blank_ratio > 0.5:
+            validation_warnings.append(
+                f"Part I: {blank_count}/{len(p1_ans)} câu trống ({blank_ratio:.0%}) — ảnh mờ hoặc góc khuất"
+            )
+
+    # Check 3: Part II sub-answer consistency (each question should have 1 answer)
+    if p2_ans:
+        for q, subs in p2_ans.items():
+            filled_subs = [k for k, v in subs.items() if v == "D"]
+            empty_subs = [k for k, v in subs.items() if v == ""]
+            if len(filled_subs) == 0 and len(empty_subs) == len(subs):
+                validation_warnings.append(f"Part II: Câu {q} không có đáp án nào")
+            elif len(filled_subs) > 1:
+                validation_warnings.append(f"Part II: Câu {q} có {len(filled_subs)} đáp án con được tô")
+
+    # Check 4: Part III digit OCR confidence
+    if p3_det:
+        for q, det in p3_det.items():
+            digit = det.get("digit", "")
+            ink_ratio = det.get("ink_ratio", 0)
+            if digit == "?" or ink_ratio < 0.02:
+                validation_warnings.append(f"Part III: Câu {q} OCR không rõ (digit='{digit}', ink={ink_ratio:.3f})")
+
+    # Print validation results
+    if validation_warnings:
+        print(f"\n  ⚠️ CẢNH BÁO VALIDATION ({len(validation_warnings)}):")
+        for w in validation_warnings:
+            print(f"    • {w}")
+    else:
+        print(f"\n  ✓ Validation: OK")
 
     # --- Bước 6: Chấm điểm (nếu có đáp án đúng) ---
     # Vẽ lên mask trống → blend vào warped (addWeighted overlay)
@@ -3138,6 +3544,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         "scan_quality": scan_quality,
         "avg_confidence": round(avg_conf, 3),
         "preprocess_mode": preprocess_mode,
+        "validation_warnings": validation_warnings,
     }
 
 

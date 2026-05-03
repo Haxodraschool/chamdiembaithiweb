@@ -672,6 +672,14 @@ def grade_api(request):
             for k, v in correct_answers.items():
                 correct_map[str(k)] = v
 
+        # [IMPROVE] Image quality scoring — cảnh báo ảnh xấu cho mobile app
+        scan_quality = result.get('scan_quality', 'OK')
+        quality_warning = ''
+        if scan_quality == 'REJECT_SCAN':
+            quality_warning = 'Ảnh quá mờ hoặc không rõ. Vui lòng chụp lại với ánh sáng tốt hơn.'
+        elif scan_quality == 'LOW_QUALITY':
+            quality_warning = 'Ảnh chất lượng thấp. Kết quả có thể chưa chính xác.'
+
         return Response({
             'success': True,
             'submission_id': submission_id,
@@ -696,6 +704,8 @@ def grade_api(request):
                 'p3_correct': weighted['p3_correct'] if weighted else 0,
             } if weighted else None,
             'detect_method': result.get('detect_method', ''),
+            'scan_quality': scan_quality,
+            'quality_warning': quality_warning,
             'processing_time': result.get('processing_time', 0),
             'result_image': result_image_b64,
             'overlay_image': overlay_image_b64,
