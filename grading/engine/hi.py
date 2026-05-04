@@ -78,7 +78,8 @@ CIRCULARITY_THRESHOLD = 0.6
 BUBBLE_PROTECT_RADIUS = BUBBLE_RADIUS + 8
 
 # --- Hybrid OpenCV + CNN (bubble classifier) ---
-HYBRID_CNN_ENABLE = True
+# Có thể tắt CNN qua env var: HYBRID_CNN_ENABLE=0 (server yếu)
+HYBRID_CNN_ENABLE = os.environ.get("HYBRID_CNN_ENABLE", "1").strip().lower() not in ("0", "false", "no")
 BUBBLE_CNN_PATH = os.path.join(os.path.dirname(__file__), "bubble_cnn.pth")
 BUBBLE_CNN_ONNX_PATH = os.path.join(os.path.dirname(__file__), "bubble_cnn.onnx")
 CNN_IMG_SIZE = 32
@@ -3712,7 +3713,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
 
     # --- Lưu ảnh kết quả (warped) ---
     out_path = f"{base}_result.jpg"
-    cv2.imwrite(out_path, result_image)
+    cv2.imwrite(out_path, result_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
     print(f"\n[OK] Ảnh kết quả: {out_path}")
 
     # --- Inverse Warp: nắn kết quả ngược về ảnh gốc ---
@@ -3729,7 +3730,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             # Overlay lên ảnh gốc
             overlay_image = cv2.addWeighted(image, 1, inv_mask, 0.8, 0)
             overlay_path = f"{base}_overlay.jpg"
-            cv2.imwrite(overlay_path, overlay_image)
+            cv2.imwrite(overlay_path, overlay_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
             print(f"[OK] Ảnh overlay (inverse warp): {overlay_path}")
         except Exception as e:
             print(f"[WARN] Inverse warp failed: {e}")
