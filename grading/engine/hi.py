@@ -816,17 +816,18 @@ def auto_deskew_and_crop(image, debug=False):
         paper_center_x = np.mean(ordered_paper[:, 0])
         paper_center_y = np.mean(ordered_paper[:, 1])
         
-        # ROI: marker nằm gần góc paper, có thể hơi LẤN RA NGOÀI mép
+        # ROI: marker nằm SÁT mép giấy (~2-5% kích thước giấy)
         paper_w = np.linalg.norm(ordered_paper[1] - ordered_paper[0])
         paper_h = np.linalg.norm(ordered_paper[3] - ordered_paper[0])
-        # [IMPROVE] Vào trong: 7% (marker cách mép 3-5%) — tăng từ 5.5%
-        inward_dist = max(35, int(min(paper_w, paper_h) * 0.07))
-        # [IMPROVE] Ra ngoài: 4% — tăng từ 1.5%. Paper contour thường tìm
-        # mép ở RÌA giấy, nhưng marker đôi khi có vẻ nằm ngoài contour do
-        # noise hoặc bóng đổ. Mở rộng ROI để bắt được.
-        outward_dist = max(20, int(min(paper_w, paper_h) * 0.04))
+        # Vào trong: ~5.5% (marker cách mép 3%) — giữ conservative
+        inward_dist = max(30, int(min(paper_w, paper_h) * 0.055))
+        # Ra ngoài: 2.5% — tăng nhẹ từ 1.5% để xử lý trường hợp
+        # paper contour tìm hơi lệch vào trong. Không quá lớn để
+        # tránh bắt phải feature ngoài giấy (background noise).
+        outward_dist = max(12, int(min(paper_w, paper_h) * 0.025))
 
         marker_centers = []
+        marker_sizes = []
         marker_results = []  # [(found_bool, corner_idx)] để log
         for i, corner_pt in enumerate(ordered_paper):
             cx_approx = int(corner_pt[0])
@@ -855,8 +856,30 @@ def auto_deskew_and_crop(image, debug=False):
 
             marker_x = x1 + marker[0]
             marker_y = y1 + marker[1]
+            marker_size = marker[2] if len(marker) >= 3 else 0
             marker_centers.append([float(marker_x), float(marker_y)])
+            marker_sizes.append(marker_size)
             marker_results.append((True, i))
+
+        # [AZOTA-INSIGHT] Size consistency check: 4 markers đều là CÙNG 1
+        # symbol in trên giấy → phải có kích thước GẦN GIỐNG NHAU.
+        # Nếu 1 marker lớn/nhỏ bất thường so với 3 cái kia → đó là NOISE
+        # (text, bóng, nếp gấp) bị nhầm → reject toàn bộ detection.
+        size_consistent = True
+        if len(marker_sizes) == 4 and all(s > 0 for s in marker_sizes):
+            s_arr = np.array(marker_sizes, dtype=float)
+            s_median = float(np.median(s_arr))
+            if s_median > 0:
+                # Mọi marker phải nằm trong 0.5x .. 2.0x median size
+                deviations = s_arr / s_median
+                if np.any(deviations < 0.5) or np.any(deviations > 2.0):
+                    size_consistent = False
+                    print(f"  [C] paper+markers: size inconsistent "
+                          f"(sizes={marker_sizes}, median={s_median:.0f}) → reject")
+
+        if not size_consistent:
+            # Force skip — clear markers để fallback về method A/B
+            marker_centers = []
         
         if len(marker_centers) == 4:
             markers_orig = order_points(
@@ -1462,22 +1485,24 @@ def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
     - Ưu tiên ô vuông nhỏ, đặc (15-25px) gần mép giấy
     
     corner_x_in_roi, corner_y_in_roi: tọa độ góc paper trong hệ ROI
-    Returns (cx, cy) hoặc None.
+    Returns (cx, cy, size) hoặc None. size = cạnh bounding box (px) để
+    caller kiểm tra consistency giữa 4 markers.
     """
     rh, rw = roi_gray.shape[:2]
     if rh < 15 or rw < 15:
         return None
 
     best_center = None
+    best_size = 0
     best_score = 0
 
-    # [IMPROVE] Mở rộng threshold range + thêm Otsu cho ảnh phone washed-out.
-    # Marker đen trong ảnh sáng/vàng vọt có thể có pixel value 100-160 (không
-    # còn đen ~50). Dải 30-150 + Otsu để bắt mọi tình huống.
-    threshold_values = [30, 50, 70, 90, 110, 130, 150]
+    # [REVERT] Giữ threshold conservative 50-150 để tránh bắt noise nhẹ
+    # (threshold < 50 sẽ bắt cả text in nhạt, chữ ký, smudge → false marker).
+    # Otsu được thêm để adapt với lighting biến thiên.
+    threshold_values = [50, 70, 90, 110, 130, 150]
     otsu_val, _ = cv2.threshold(roi_gray, 0, 255,
                                 cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    if 30 <= otsu_val <= 200:
+    if 50 <= otsu_val <= 180:
         threshold_values.append(int(otsu_val))
 
     for tval in threshold_values:
@@ -1522,9 +1547,10 @@ def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
                 if score > best_score:
                     best_score = score
                     best_center = (mcx, mcy)
+                    best_size = max(bw, bh)
 
     if best_center is not None:
-        return best_center
+        return (best_center[0], best_center[1], best_size)
 
     # Fallback: Template matching (giữ nguyên)
     for tsize in [16, 20, 24]:
@@ -1540,7 +1566,8 @@ def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
 
         if max_val > 0.35:
             return (max_loc[0] + tmpl.shape[1] // 2,
-                    max_loc[1] + tmpl.shape[0] // 2)
+                    max_loc[1] + tmpl.shape[0] // 2,
+                    tsize)
 
     return None
 
@@ -1563,13 +1590,11 @@ def _find_marker_in_roi(roi_gray):
     best_center = None
     best_score = 0
 
-    # [IMPROVE] Mở rộng threshold range + thêm Otsu cho ảnh phone washed-out.
-    # Marker đen trong ảnh sáng/vàng vọt có thể có pixel value 100-160 (không
-    # còn đen ~50). Dải 30-150 + Otsu để bắt mọi tình huống.
-    threshold_values = [30, 50, 70, 90, 110, 130, 150]
+    # Threshold conservative 50-150 + Otsu adaptive.
+    threshold_values = [50, 70, 90, 110, 130, 150]
     otsu_val, _ = cv2.threshold(roi_gray, 0, 255,
                                 cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    if 30 <= otsu_val <= 200:
+    if 50 <= otsu_val <= 180:
         threshold_values.append(int(otsu_val))
 
     for tval in threshold_values:
