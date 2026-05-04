@@ -815,44 +815,56 @@ def auto_deskew_and_crop(image, debug=False):
         # Tâm giấy — dùng để xác định hướng "vào trong"
         paper_center_x = np.mean(ordered_paper[:, 0])
         paper_center_y = np.mean(ordered_paper[:, 1])
-        
-        # ROI: marker nằm SÁT mép giấy (~2-5% kích thước giấy)
+
         paper_w = np.linalg.norm(ordered_paper[1] - ordered_paper[0])
         paper_h = np.linalg.norm(ordered_paper[3] - ordered_paper[0])
-        # Vào trong: ~5.5% (marker cách mép 3%) — giữ conservative
-        inward_dist = max(30, int(min(paper_w, paper_h) * 0.055))
-        # Ra ngoài: 2.5% — tăng nhẹ từ 1.5% để xử lý trường hợp
-        # paper contour tìm hơi lệch vào trong. Không quá lớn để
-        # tránh bắt phải feature ngoài giấy (background noise).
-        outward_dist = max(12, int(min(paper_w, paper_h) * 0.025))
+
+        # [TEMPLATE-AWARE] QM 2025: corner markers nằm CÁCH mép giấy ~4% về
+        # phía trong. Search ROI CENTER PHẢI là điểm kỳ vọng của marker, KHÔNG
+        # phải paper corner. Bán kính ROI ±3% đủ để bắt marker với perspective
+        # biến thiên vừa phải.
+        #
+        # Layout QM 2025 (từ ảnh template):
+        #   Paper edge -> 4%% white margin -> 2%% marker size -> form content
+        #   Vậy marker CENTER ≈ paper_corner + 5%% về phía tâm
+        INSET_RATIO = 0.05  # marker center inset 5% từ paper corner
+        SEARCH_RADIUS_RATIO = 0.035  # ±3.5% quanh vị trí kỳ vọng
+        inset_dist = int(min(paper_w, paper_h) * INSET_RATIO)
+        search_r = max(20, int(min(paper_w, paper_h) * SEARCH_RADIUS_RATIO))
 
         marker_centers = []
         marker_sizes = []
         marker_results = []  # [(found_bool, corner_idx)] để log
         for i, corner_pt in enumerate(ordered_paper):
-            cx_approx = int(corner_pt[0])
-            cy_approx = int(corner_pt[1])
+            cx_paper = int(corner_pt[0])
+            cy_paper = int(corner_pt[1])
 
             # Hướng "vào trong" giấy
-            dx_sign = int(np.sign(paper_center_x - cx_approx))
-            dy_sign = int(np.sign(paper_center_y - cy_approx))
+            dx_sign = int(np.sign(paper_center_x - cx_paper))
+            dy_sign = int(np.sign(paper_center_y - cy_paper))
 
-            # ROI: vào trong nhiều, ra ngoài ít
-            x1 = max(0, cx_approx - (outward_dist if dx_sign > 0 else inward_dist))
-            x2 = min(img_w, cx_approx + (inward_dist if dx_sign > 0 else outward_dist))
-            y1 = max(0, cy_approx - (outward_dist if dy_sign > 0 else inward_dist))
-            y2 = min(img_h, cy_approx + (inward_dist if dy_sign > 0 else outward_dist))
+            # [FIX] Vị trí kỳ vọng của marker = paper_corner + inset về phía tâm
+            mx_expected = cx_paper + dx_sign * inset_dist
+            my_expected = cy_paper + dy_sign * inset_dist
+
+            # ROI đối xứng quanh vị trí kỳ vọng
+            x1 = max(0, mx_expected - search_r)
+            x2 = min(img_w, mx_expected + search_r)
+            y1 = max(0, my_expected - search_r)
+            y2 = min(img_h, my_expected + search_r)
 
             roi = gray_orig[y1:y2, x1:x2]
             if roi.size == 0:
                 marker_results.append((False, i))
-                continue  # [FIX] continue thay vì break — thử tất cả 4 góc
+                continue
 
-            # Tìm ô vuông đen + ưu tiên vị trí GẦN góc paper nhất
-            marker = _find_marker_near_corner(roi, cx_approx - x1, cy_approx - y1)
+            # Tọa độ "tâm ROI = vị trí kỳ vọng marker" trong hệ ROI
+            cx_in_roi = mx_expected - x1
+            cy_in_roi = my_expected - y1
+            marker = _find_marker_near_corner(roi, cx_in_roi, cy_in_roi)
             if marker is None:
                 marker_results.append((False, i))
-                continue  # [FIX] continue thay vì break
+                continue
 
             marker_x = x1 + marker[0]
             marker_y = y1 + marker[1]
@@ -1526,22 +1538,21 @@ def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
                 mcx = x + bw // 2
                 mcy = y + bh // 2
                 
-                # Khoảng cách đến góc paper (trong hệ ROI)
+                # Khoảng cách đến TÂM ROI (= vị trí kỳ vọng của marker)
                 dist = np.sqrt((mcx - corner_x_in_roi)**2 + 
                                (mcy - corner_y_in_roi)**2)
                 
-                # [FIX] Proximity bonus — marker thật nằm CÁCH mép giấy 20-60px,
-                # KHÔNG phải sát mép. Feature sát mép (dist<10px) thường là
-                # shadow/nếp gấp/chữ in — phải bị phạt, không thưởng.
-                #   dist < 10px  : nhiễu mép giấy → phạt mạnh (0.3)
-                #   10-70px      : vùng marker hợp lý → bonus 1.0
-                #   > 70px       : quá xa → giảm dần
-                if dist < 10:
-                    proximity = 0.3
-                elif dist <= 70:
+                # [TEMPLATE-AWARE] Caller đã center ROI vào vị trí kỳ vọng
+                # của marker rồi, nên marker thật sẽ nằm GẦN TÂM ROI nhất.
+                #   dist < 25px  : trúng vị trí → bonus tối đa 1.0
+                #   25-50px      : chấp nhận được → giảm dần
+                #   > 50px       : quá xa kỳ vọng → giảm mạnh
+                if dist < 25:
                     proximity = 1.0
+                elif dist <= 50:
+                    proximity = 1.0 - (dist - 25) / 100.0  # 1.0 → 0.75
                 else:
-                    proximity = max(0.2, 1.0 - (dist - 70) / 100.0)
+                    proximity = max(0.2, 0.75 - (dist - 50) / 100.0)
                 
                 score = area * squareness * fill * proximity
                 if score > best_score:
