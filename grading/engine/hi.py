@@ -3651,13 +3651,20 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             elif len(filled_subs) > 1:
                 validation_warnings.append(f"Part II: Câu {q} có {len(filled_subs)} đáp án con được tô")
 
-    # Check 4: Part III digit OCR confidence
-    if p3_det:
+    # Check 4: Part III answer detection
+    # p3_det chứa chi tiết từng câu (sign, comma, digits, digits_score, ...)
+    # p3_ans chứa đáp án đã pick (string hoặc rỗng)
+    if p3_det and p3_ans:
         for q, det in p3_det.items():
-            digit = det.get("digit", "")
-            ink_ratio = det.get("ink_ratio", 0)
-            if digit == "?" or ink_ratio < 0.02:
-                validation_warnings.append(f"Part III: Câu {q} OCR không rõ (digit='{digit}', ink={ink_ratio:.3f})")
+            ans = p3_ans.get(q, "")
+            digits_list = det.get("digits", [])
+            # Đếm số digit phát hiện được (>= 0)
+            digit_count = sum(1 for d_dict in digits_list
+                              if isinstance(d_dict, dict) and any(v > 0.15 for v in d_dict.values()))
+            # Chỉ cảnh báo nếu CÓ tô (digit_count > 0) nhưng kết quả rỗng → mâu thuẫn
+            if digit_count > 0 and not ans:
+                validation_warnings.append(
+                    f"Part III: Câu {q} có {digit_count} cột tô nhưng không pick được đáp án")
 
     # Print validation results
     if validation_warnings:
