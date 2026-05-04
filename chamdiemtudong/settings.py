@@ -44,6 +44,14 @@ CSRF_TRUSTED_ORIGINS = [
 if RAILWAY_PUBLIC_DOMAIN:
     CSRF_TRUSTED_ORIGINS.append(f'https://{RAILWAY_PUBLIC_DOMAIN}')
 
+# Custom domain (DuckDNS, custom DNS, ...) — set via env CSRF_TRUSTED_ORIGINS
+_extra_csrf = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
+if _extra_csrf:
+    CSRF_TRUSTED_ORIGINS.extend([o.strip() for o in _extra_csrf.split(',') if o.strip()])
+
+# Tin Nginx forward HTTPS qua header X-Forwarded-Proto
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 
 
 # =============================================================================
