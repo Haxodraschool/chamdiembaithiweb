@@ -1,0 +1,69 @@
+# ── Git / VCS ────────────────────────────────────────────────────────────────
+.git
+.gitignore
+.github
+
+# ── Python cache ─────────────────────────────────────────────────────────────
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+venv
+env
+.venv
+.env
+
+# ── IDE / Editor ─────────────────────────────────────────────────────────────
+.vscode
+.idea
+.windsurf
+*.swp
+*.swo
+
+# ── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Logs / Temp ──────────────────────────────────────────────────────────────
+*.log
+logs
+tmp
+temp
+
+# ── Dev databases ────────────────────────────────────────────────────────────
+db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+
+# ── Media uploads (re-created at runtime) ────────────────────────────────────
+media/uploads
+media/results
+
+# ── Test images ──────────────────────────────────────────────────────────────
+anh
+test_images
+*_result.jpg
+*_overlay.jpg
+*_name.jpg
+
+# ── Flutter app (built separately) ───────────────────────────────────────────
+gradeflow_app
+
+# ── Docs / Plans ─────────────────────────────────────────────────────────────
+plans
+docs
+*.md
+!README.md
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+1234567
+.dockerignore
+Dockerfile
