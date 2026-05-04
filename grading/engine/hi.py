@@ -2730,11 +2730,17 @@ def extract_part1(cleaned_img, y_offset=0):
     answers = {}
     details = {}
 
-    # ── Auto-alignment: tính shift cho mỗi cột ──
-    align_shifts = _auto_align_field_blocks(cleaned_img)
-    any_shift = any(v != 0 for v in align_shifts.values())
-    if any_shift:
-        print(f"[OK] Auto-align Part I shifts: {align_shifts}")
+    # ── Auto-alignment: tính shift cho mỗi cột (safe) ──
+    import time as _t
+    _t0 = _t.time()
+    try:
+        align_shifts = _auto_align_field_blocks(cleaned_img, max_shift=5)
+        any_shift = any(v != 0 for v in align_shifts.values())
+        if any_shift:
+            print(f"[OK] Auto-align Part I shifts: {align_shifts} ({(_t.time()-_t0)*1000:.0f}ms)")
+    except Exception as e:
+        print(f"[WARN] Auto-align failed: {e}")
+        align_shifts = {f"part1_col{i}": 0 for i in range(len(PART1_COLS))}
 
     # ── PASS 1: Thu thập TẤT CẢ ratios (với alignment correction) ──
     for col_idx, cfg in enumerate(PART1_COLS):
