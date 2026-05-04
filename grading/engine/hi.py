@@ -2365,9 +2365,9 @@ def _ocr_digit_from_box(gray_img, box):
 # ║      BƯỚC 5a: TRÍCH XUẤT ĐÁP ÁN PHẦN I (40 câu ABCD)             ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
-def _detect_filled_choices(ratios):
+def _detect_filled_choices(ratios, global_threshold=None, local_threshold=None):
     """
-    Phát hiện bubble được tô — 3 phương pháp + cluster analysis.
+    Phát hiện bubble được tô — 4 phương pháp + cluster analysis.
 
     QUAN TRỌNG: Phải detect CHÍNH XÁC số bubble tô:
       - 0 bubble → "" (bỏ trống)
@@ -2377,8 +2377,9 @@ def _detect_filled_choices(ratios):
     Pipeline:
     1) Cluster: Tìm "gap lớn nhất" trong dãy ratio → tách filled vs empty
     2) TNMaker Relative: Xác nhận cluster bằng gap analysis
-    3) Absolute: Fallback cho ảnh sạch
-    4) Adaptive: Trừ noise floor cho ảnh nhạt
+    3) 2-Level Threshold: OMRChecker-inspired local+global (NEW)
+    4) Absolute: Fallback cho ảnh sạch
+    5) Adaptive: Trừ noise floor cho ảnh nhạt
     """
     if not ratios:
         return []
@@ -2447,7 +2448,34 @@ def _detect_filled_choices(ratios):
         if sorted_r[0] - sorted_r[1] > tn_gap_threshold:
             return [paired[0][0]]
 
-    # ── METHOD 2: Absolute threshold ──
+    # ── METHOD 2: 2-Level Threshold (OMRChecker-inspired) ──
+    if local_threshold is not None:
+        filled_2level = [ch for ch, r in ratios.items() if r > local_threshold]
+        if filled_2level:
+            if len(filled_2level) == 1:
+                return filled_2level
+            # Nhiều bubble vượt local threshold → check dominance
+            filled_sorted = sorted([(ch, ratios[ch]) for ch in filled_2level],
+                                   key=lambda x: x[1], reverse=True)
+            top_r = filled_sorted[0][1]
+            second_r = filled_sorted[1][1]
+            if (top_r - second_r) > 0.05 or (second_r > 0 and top_r / second_r > 1.3):
+                return [filled_sorted[0][0]]
+            return filled_2level  # Thật sự tô nhiều → X
+    elif global_threshold is not None:
+        filled_global = [ch for ch, r in ratios.items() if r > global_threshold]
+        if filled_global:
+            if len(filled_global) == 1:
+                return filled_global
+            filled_sorted = sorted([(ch, ratios[ch]) for ch in filled_global],
+                                   key=lambda x: x[1], reverse=True)
+            top_r = filled_sorted[0][1]
+            second_r = filled_sorted[1][1]
+            if (top_r - second_r) > 0.08 or (second_r > 0 and top_r / second_r > 1.5):
+                return [filled_sorted[0][0]]
+            return filled_global
+
+    # ── METHOD 3: Absolute threshold ──
     # Use FILL_THRESHOLD directly
     abs_threshold = FILL_THRESHOLD
     filled = [ch for ch, r in ratios.items() if r > abs_threshold]
@@ -2524,6 +2552,86 @@ def _confidence_score(ratios):
     return round(conf, 3)
 
 
+def _compute_global_threshold(all_ratios_by_question, looseness=1):
+    """
+    Tính global threshold từ TẤT CẢ bubble ratios trong phiếu.
+    Port từ OMRChecker core.py:get_global_threshold().
+
+    Args:
+        all_ratios_by_question: dict {q_num: {'A': ratio, 'B': ratio, ...}, ...}
+        looseness: độ rộng tìm kiếm gap (1=standard, 2=wider)
+
+    Returns:
+        (global_threshold, j_low, j_high)
+    """
+    all_vals = []
+    for q_ratios in all_ratios_by_question.values():
+        all_vals.extend(q_ratios.values())
+
+    if not all_vals:
+        return FILL_THRESHOLD, 0, 0
+
+    q_vals = sorted(all_vals)
+    l = len(q_vals) - looseness
+    ls = (looseness + 1) // 2
+
+    # Tìm FIRST LARGE GAP
+    MIN_JUMP = 0.08
+    max1, thr1 = MIN_JUMP, FILL_THRESHOLD
+
+    for i in range(ls, l):
+        jump = q_vals[min(i + ls, len(q_vals) - 1)] - q_vals[max(i - ls, 0)]
+        if jump > max1:
+            max1 = jump
+            thr1 = q_vals[max(i - ls, 0)] + jump / 2
+
+    return thr1, thr1 - max1 / 2, thr1 + max1 / 2
+
+
+def _compute_local_threshold(strip_ratios, global_thr, no_outliers):
+    """
+    Tính local threshold cho 1 question strip.
+    Port từ OMRChecker core.py:get_local_threshold().
+
+    Args:
+        strip_ratios: list of ratio values cho 1 câu hỏi (4 hoặc 2 giá trị)
+        global_thr: global threshold đã tính
+        no_outliers: True nếu strip này không có outlier (all similar)
+
+    Returns:
+        local_threshold
+    """
+    q_vals = sorted(strip_ratios)
+
+    # Base case: ít hơn 3 giá trị
+    if len(q_vals) < 3:
+        if max(q_vals) - min(q_vals) < 0.05:
+            return global_thr
+        return np.mean(q_vals)
+
+    # Tìm LARGEST GAP
+    l = len(q_vals) - 1
+    MIN_JUMP = 0.08
+    max1, thr1 = MIN_JUMP, 1.0
+
+    for i in range(1, l):
+        jump = q_vals[i + 1] - q_vals[i - 1]
+        if jump > max1:
+            max1 = jump
+            thr1 = q_vals[i - 1] + jump / 2
+
+    CONFIDENT_SURPLUS = 0.03
+    confident_jump = MIN_JUMP + CONFIDENT_SURPLUS
+
+    # Nếu gap không đủ lớn → dùng global threshold
+    if max1 < confident_jump:
+        if no_outliers:
+            return global_thr
+        return np.mean(q_vals)
+
+    return thr1
+
+
 def _count_detected(answers_dict):
     """Count how many questions have a real answer (not '' or 'X')."""
     return sum(1 for a in answers_dict.values()
@@ -2531,11 +2639,90 @@ def _count_detected(answers_dict):
                or isinstance(a, dict) and any(v not in ("", "X") for v in a.values()))
 
 
+def _auto_align_field_blocks(gray, max_shift=8, stride=1):
+    """
+    Tính horizontal shift cho mỗi Part I column dựa trên morphological analysis.
+    Port từ OMRChecker auto-align logic.
+
+    Ý tưởng: Dùng vertical morphological kernel để tìm đường dọc (cột bubble).
+    So sánh vị trí đường dọc thực tế vs expected → tính shift pixel.
+
+    Args:
+        gray: ảnh grayscale đã preprocess (warped 1400x1920)
+        max_shift: số pixel tối đa được phép shift
+        stride: bước nhảy khi tìm shift
+
+    Returns:
+        dict {"part1_col0": shift_px, "part1_col1": shift_px, ...}
+    """
+    h, w = gray.shape[:2]
+    shifts = {}
+
+    for col_idx, cfg in enumerate(PART1_COLS):
+        sx = int(cfg["start_x"])
+        sy = int(cfg["start_y"])
+        dx = cfg["step_x"]
+        col_rows = cfg.get("num_rows", PART1_NUM_ROWS)
+        block_h = int(col_rows * cfg["step_y"])
+        # Block width: from first choice (A) to last choice (D)
+        block_w = int(3 * dx) + 20
+
+        # Extract region around this column (with margin for shifting)
+        margin = max_shift + 10
+        x1 = max(0, sx - margin)
+        x2 = min(w, sx + block_w + margin)
+        y1 = max(0, sy - 5)
+        y2 = min(h, sy + block_h + 5)
+
+        roi = gray[y1:y2, x1:x2]
+        if roi.size == 0:
+            shifts[f"part1_col{col_idx}"] = 0
+            continue
+
+        # Binary threshold to find dark marks (bubbles)
+        _, roi_bin = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # Vertical projection: sum each column → peaks = bubble columns
+        v_proj = np.sum(roi_bin, axis=0).astype(float)
+        if v_proj.max() == 0:
+            shifts[f"part1_col{col_idx}"] = 0
+            continue
+
+        # Expected column positions (relative to roi)
+        expected_cols = []
+        for ci in range(4):  # A, B, C, D
+            expected_x = (sx + ci * dx) - x1
+            expected_cols.append(expected_x)
+
+        # Try different shifts and find best match
+        best_shift = 0
+        best_score = 0
+
+        for shift in range(-max_shift, max_shift + 1, stride):
+            score = 0
+            for exp_x in expected_cols:
+                px = int(exp_x + shift)
+                # Sum projection in small window around expected position
+                lo = max(0, px - BUBBLE_RADIUS)
+                hi = min(len(v_proj), px + BUBBLE_RADIUS)
+                if lo < hi:
+                    score += np.sum(v_proj[lo:hi])
+            if score > best_score:
+                best_score = score
+                best_shift = shift
+
+        shifts[f"part1_col{col_idx}"] = best_shift
+
+    return shifts
+
+
 def extract_part1(cleaned_img, y_offset=0):
     """
     Đọc 40 câu trắc nghiệm ABCD.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
-    Hybrid 1-pass: max(OpenCV, CNN) cho mỗi bubble.
+    2-pass approach:
+      Pass 1: Thu thập TẤT CẢ ratios
+      Pass 2: Tính global/local thresholds → detect answers
     Trả về:
       answers: {1: 'A', 2: 'C', ...}  ('X'=tô nhiều, ''=không tô)
       details: {1: {'A': 0.05, 'B': 0.72, ...}, ...}  (fill ratio)
@@ -2543,10 +2730,18 @@ def extract_part1(cleaned_img, y_offset=0):
     answers = {}
     details = {}
 
-    for cfg in PART1_COLS:
+    # ── Auto-alignment: tính shift cho mỗi cột ──
+    align_shifts = _auto_align_field_blocks(cleaned_img)
+    any_shift = any(v != 0 for v in align_shifts.values())
+    if any_shift:
+        print(f"[OK] Auto-align Part I shifts: {align_shifts}")
+
+    # ── PASS 1: Thu thập TẤT CẢ ratios (với alignment correction) ──
+    for col_idx, cfg in enumerate(PART1_COLS):
         sx, sy = cfg["start_x"], cfg["start_y"]
         dx, dy = cfg["step_x"], cfg["step_y"]
         q_start = cfg["q_start"]
+        col_shift = align_shifts.get(f"part1_col{col_idx}", 0)
 
         col_rows = cfg.get("num_rows", PART1_NUM_ROWS)
         for row in range(col_rows):
@@ -2555,29 +2750,49 @@ def extract_part1(cleaned_img, y_offset=0):
             ratios = {}
 
             for ci, choice in enumerate(PART1_CHOICES):
-                cx = sx + ci * dx
+                cx = sx + ci * dx + col_shift
                 score, ratio, cnn_conf = _hybrid_score(cleaned_img, cx, cy)
                 ratios[choice] = round(score, 3)
 
             details[q] = ratios
-            filled_choices = _detect_filled_choices(ratios)
-            ans = _pick_answer(filled_choices)
-            conf = _confidence_score(ratios)
-            answers[q] = ans
 
-            # Debug: log fill ratios cho câu bị blank, uncertain, hoặc tất cả
-            if ans in ("", "X"):
-                logger.warning(
-                    f"P1 Q{q} BLANK: ratios={ratios}  "
-                    f"max={max(ratios.values()):.3f}  "
-                    f"threshold={FILL_THRESHOLD}  conf={conf}"
-                )
-            elif conf < 0.5:
-                logger.warning(
-                    f"P1 Q{q}={ans} LOW_CONF({conf:.2f}): ratios={ratios}"
-                )
-            else:
-                logger.debug(f"P1 Q{q}={ans} conf={conf}: ratios={ratios}")
+    # ── PASS 2: Tính global threshold từ tất cả ratios ──
+    global_thr, _, _ = _compute_global_threshold(details)
+
+    # Tính std cho mỗi strip → xác định no_outliers
+    all_q_std_vals = []
+    for q, ratios in details.items():
+        vals = list(ratios.values())
+        all_q_std_vals.append(np.std(vals))
+    global_std_thresh = np.median(all_q_std_vals) if all_q_std_vals else 0.1
+
+    # ── PASS 3: Detect answers với 2-level thresholds ──
+    for q, ratios in details.items():
+        strip_std = np.std(list(ratios.values()))
+        no_outliers = strip_std < global_std_thresh
+        local_thr = _compute_local_threshold(
+            list(ratios.values()), global_thr, no_outliers)
+
+        filled_choices = _detect_filled_choices(
+            ratios, global_threshold=global_thr, local_threshold=local_thr)
+        ans = _pick_answer(filled_choices)
+        conf = _confidence_score(ratios)
+        answers[q] = ans
+
+        # Debug: log fill ratios cho câu bị blank, uncertain, hoặc tất cả
+        if ans in ("", "X"):
+            logger.warning(
+                f"P1 Q{q} BLANK: ratios={ratios}  "
+                f"max={max(ratios.values()):.3f}  "
+                f"g_thr={global_thr:.3f} l_thr={local_thr:.3f}  conf={conf}"
+            )
+        elif conf < 0.5:
+            logger.warning(
+                f"P1 Q{q}={ans} LOW_CONF({conf:.2f}): ratios={ratios} "
+                f"g_thr={global_thr:.3f} l_thr={local_thr:.3f}"
+            )
+        else:
+            logger.debug(f"P1 Q{q}={ans} conf={conf}: ratios={ratios}")
 
     return answers, details
 
