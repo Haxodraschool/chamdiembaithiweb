@@ -3260,73 +3260,74 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     sbd, made, sbd_det = extract_sbd_made(gray)
     p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
 
-    # --- Hybrid Decision: check FAST confidence → retry ROBUST → PHONE if needed ---
+    # --- Hybrid Decision: try multiple preprocessing, KEEP THE BEST ---
     fast_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
     fast_avg_conf = sum(fast_confs) / max(1, len(fast_confs))
     fast_low = sum(1 for c in fast_confs if c < 0.4)
     fast_blank = sum(1 for a in p1_ans.values() if a == "")
 
+    # Track best result across all preprocessing modes
+    best_avg_conf = fast_avg_conf
+    best_gray, best_thresh, best_cleaned = gray, thresh, cleaned
+    best_offsets = offsets.copy()
+    best_sbd, best_made, best_sbd_det = sbd, made, sbd_det
+    best_p1_ans, best_p1_det = p1_ans, p1_det
+    best_preprocess_mode = preprocess_mode
+
     need_robust = (fast_low / max(1, len(fast_confs)) > 0.25 or
                    fast_blank / max(1, len(fast_confs)) > 0.3)
 
     if need_robust:
-        _t1 = _time.time()
-        preprocess_mode = "robust"
-        gray, thresh, cleaned = preprocess(warped, mode="robust")
-        print(f"[RETRY] FAST avg_conf={fast_avg_conf:.2f}, low={fast_low}, blank={fast_blank} → ROBUST ({_time.time()-_t1:.2f}s)")
-        # Re-detect with robust preprocessing
-        offsets = detect_section_offsets(gray)
-        p3_offset = detect_part3_offset_from_digits(gray)
-        if p3_offset is not None:
-            offsets["part3"] = p3_offset
-        sbd, made, sbd_det = extract_sbd_made(gray)
-        p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+        for retry_mode, retry_label, retry_kwargs in [
+            ("robust", "ROBUST", {"mode": "robust"}),
+            ("enhanced_camera", "ENHANCED", {"enhance_camera": True, "mode": "robust"}),
+            ("phone", "PHONE", {"mode": "phone"}),
+        ]:
+            _t1 = _time.time()
+            r_gray, r_thresh, r_cleaned = preprocess(warped, **retry_kwargs)
+            r_offsets = detect_section_offsets(r_gray)
+            r_p3_offset = detect_part3_offset_from_digits(r_gray)
+            if r_p3_offset is not None:
+                r_offsets["part3"] = r_p3_offset
+            r_sbd, r_made, r_sbd_det = extract_sbd_made(r_gray)
+            r_p1_ans, r_p1_det = extract_part1(r_gray, y_offset=r_offsets["part1"])
 
-        # IMPROVEMENT: Retry with enhanced_camera if robust still low
-        robust_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
-        robust_avg_conf = sum(robust_confs) / max(1, len(robust_confs))
-        robust_low = sum(1 for c in robust_confs if c < 0.4)
-        robust_blank = sum(1 for a in p1_ans.values() if a == "")
-        need_enhanced = (robust_low / max(1, len(robust_confs)) > 0.25 or
-                         robust_blank / max(1, len(robust_confs)) > 0.3)
+            r_confs = [_confidence_score(ratios) for ratios in r_p1_det.values()]
+            r_avg_conf = sum(r_confs) / max(1, len(r_confs))
+            r_low = sum(1 for c in r_confs if c < 0.4)
+            r_blank = sum(1 for a in r_p1_ans.values() if a == "")
 
-        if need_enhanced:
-            _t2 = _time.time()
-            preprocess_mode = "enhanced_camera"
-            gray, thresh, cleaned = preprocess(warped, enhance_camera=True, mode="robust")
-            print(f"[RETRY2] ROBUST avg_conf={robust_avg_conf:.2f}, low={robust_low}, blank={robust_blank} → ENHANCED ({_time.time()-_t2:.2f}s)")
-            offsets = detect_section_offsets(gray)
-            p3_offset = detect_part3_offset_from_digits(gray)
-            if p3_offset is not None:
-                offsets["part3"] = p3_offset
-            sbd, made, sbd_det = extract_sbd_made(gray)
-            p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+            print(f"[RETRY] {retry_label} avg_conf={r_avg_conf:.2f}, low={r_low}, blank={r_blank} ({_time.time()-_t1:.2f}s)")
 
-            # [IMPROVE] Final retry: PHONE mode (mạnh nhất, dùng non-local means denoising)
-            enhanced_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
-            enhanced_avg_conf = sum(enhanced_confs) / max(1, len(enhanced_confs))
-            enhanced_low = sum(1 for c in enhanced_confs if c < 0.4)
-            enhanced_blank = sum(1 for a in p1_ans.values() if a == "")
-            need_phone = (enhanced_low / max(1, len(enhanced_confs)) > 0.25 or
-                          enhanced_blank / max(1, len(enhanced_confs)) > 0.3)
-
-            if need_phone:
-                _t3 = _time.time()
-                preprocess_mode = "phone"
-                gray, thresh, cleaned = preprocess(warped, mode="phone")
-                print(f"[RETRY3] ENHANCED avg_conf={enhanced_avg_conf:.2f}, low={enhanced_low}, blank={enhanced_blank} → PHONE ({_time.time()-_t3:.2f}s)")
-                offsets = detect_section_offsets(gray)
-                p3_offset = detect_part3_offset_from_digits(gray)
-                if p3_offset is not None:
-                    offsets["part3"] = p3_offset
-                sbd, made, sbd_det = extract_sbd_made(gray)
-                p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+            # Keep this result if it's better than the current best
+            if r_avg_conf > best_avg_conf:
+                print(f"  → {retry_label} better: {r_avg_conf:.3f} > {best_avg_conf:.3f} → switching")
+                best_avg_conf = r_avg_conf
+                best_gray, best_thresh, best_cleaned = r_gray, r_thresh, r_cleaned
+                best_offsets = r_offsets.copy()
+                best_sbd, best_made, best_sbd_det = r_sbd, r_made, r_sbd_det
+                best_p1_ans, best_p1_det = r_p1_ans, r_p1_det
+                best_preprocess_mode = retry_mode
             else:
-                print(f"[OK] ENHANCED sufficient: avg_conf={enhanced_avg_conf:.2f}, low={enhanced_low}, blank={enhanced_blank}")
-        else:
-            print(f"[OK] ROBUST sufficient: avg_conf={robust_avg_conf:.2f}, low={robust_low}, blank={robust_blank}")
+                print(f"  → {retry_label} worse: {r_avg_conf:.3f} <= {best_avg_conf:.3f} → keeping {best_preprocess_mode}")
+
+            # If quality is now good enough, stop retrying
+            good_enough = (r_low / max(1, len(r_confs)) <= 0.25 and
+                           r_blank / max(1, len(r_confs)) <= 0.3)
+            if good_enough and r_avg_conf >= best_avg_conf:
+                print(f"  → {retry_label} good enough, stopping retries")
+                break
+
+        print(f"[BEST] Using preprocess: {best_preprocess_mode} (avg_conf={best_avg_conf:.3f})")
     else:
         print(f"[OK] FAST sufficient: avg_conf={fast_avg_conf:.2f}, low={fast_low}, blank={fast_blank}")
+
+    # Restore best results
+    gray, thresh, cleaned = best_gray, best_thresh, best_cleaned
+    offsets = best_offsets
+    sbd, made, sbd_det = best_sbd, best_made, best_sbd_det
+    p1_ans, p1_det = best_p1_ans, best_p1_det
+    preprocess_mode = best_preprocess_mode
 
     p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
     p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
