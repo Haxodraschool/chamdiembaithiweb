@@ -816,41 +816,47 @@ def auto_deskew_and_crop(image, debug=False):
         paper_center_x = np.mean(ordered_paper[:, 0])
         paper_center_y = np.mean(ordered_paper[:, 1])
         
-        # ROI rất nhỏ: marker nằm SÁT mép giấy (~2-5% kích thước giấy)
+        # ROI: marker nằm gần góc paper, có thể hơi LẤN RA NGOÀI mép
         paper_w = np.linalg.norm(ordered_paper[1] - ordered_paper[0])
         paper_h = np.linalg.norm(ordered_paper[3] - ordered_paper[0])
-        # Vào trong: ~5% kích thước giấy (marker cách mép ~3%)
-        inward_dist = max(30, int(min(paper_w, paper_h) * 0.055))
-        # Ra ngoài: chỉ ~1.5% (marker có thể hơi lấn ra ngoài mép paper contour)
-        outward_dist = max(10, int(min(paper_w, paper_h) * 0.015))
-        
+        # [IMPROVE] Vào trong: 7% (marker cách mép 3-5%) — tăng từ 5.5%
+        inward_dist = max(35, int(min(paper_w, paper_h) * 0.07))
+        # [IMPROVE] Ra ngoài: 4% — tăng từ 1.5%. Paper contour thường tìm
+        # mép ở RÌA giấy, nhưng marker đôi khi có vẻ nằm ngoài contour do
+        # noise hoặc bóng đổ. Mở rộng ROI để bắt được.
+        outward_dist = max(20, int(min(paper_w, paper_h) * 0.04))
+
         marker_centers = []
+        marker_results = []  # [(found_bool, corner_idx)] để log
         for i, corner_pt in enumerate(ordered_paper):
             cx_approx = int(corner_pt[0])
             cy_approx = int(corner_pt[1])
-            
+
             # Hướng "vào trong" giấy
             dx_sign = int(np.sign(paper_center_x - cx_approx))
             dy_sign = int(np.sign(paper_center_y - cy_approx))
-            
+
             # ROI: vào trong nhiều, ra ngoài ít
             x1 = max(0, cx_approx - (outward_dist if dx_sign > 0 else inward_dist))
             x2 = min(img_w, cx_approx + (inward_dist if dx_sign > 0 else outward_dist))
             y1 = max(0, cy_approx - (outward_dist if dy_sign > 0 else inward_dist))
             y2 = min(img_h, cy_approx + (inward_dist if dy_sign > 0 else outward_dist))
-            
+
             roi = gray_orig[y1:y2, x1:x2]
             if roi.size == 0:
-                break
-            
+                marker_results.append((False, i))
+                continue  # [FIX] continue thay vì break — thử tất cả 4 góc
+
             # Tìm ô vuông đen + ưu tiên vị trí GẦN góc paper nhất
             marker = _find_marker_near_corner(roi, cx_approx - x1, cy_approx - y1)
             if marker is None:
-                break
-            
+                marker_results.append((False, i))
+                continue  # [FIX] continue thay vì break
+
             marker_x = x1 + marker[0]
             marker_y = y1 + marker[1]
             marker_centers.append([float(marker_x), float(marker_y)])
+            marker_results.append((True, i))
         
         if len(marker_centers) == 4:
             markers_orig = order_points(
@@ -885,7 +891,10 @@ def auto_deskew_and_crop(image, debug=False):
             else:
                 print(f"  [C] paper+markers: quad invalid → skip")
         else:
-            print(f"  [C] paper+markers: only {len(marker_centers)}/4 markers → skip")
+            corner_names = ["TL", "TR", "BR", "BL"]  # Top-Left, Top-Right, ...
+            failed_corners = [corner_names[i] for found, i in marker_results if not found]
+            print(f"  [C] paper+markers: only {len(marker_centers)}/4 markers → skip"
+                  f" (failed: {','.join(failed_corners) if failed_corners else 'none'})")
 
     # ─── Chọn kết quả tốt nhất ───
     if not candidates:
@@ -1462,7 +1471,16 @@ def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
     best_center = None
     best_score = 0
 
-    for tval in [50, 70, 90, 110, 130]:
+    # [IMPROVE] Mở rộng threshold range + thêm Otsu cho ảnh phone washed-out.
+    # Marker đen trong ảnh sáng/vàng vọt có thể có pixel value 100-160 (không
+    # còn đen ~50). Dải 30-150 + Otsu để bắt mọi tình huống.
+    threshold_values = [30, 50, 70, 90, 110, 130, 150]
+    otsu_val, _ = cv2.threshold(roi_gray, 0, 255,
+                                cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    if 30 <= otsu_val <= 200:
+        threshold_values.append(int(otsu_val))
+
+    for tval in threshold_values:
         _, binary = cv2.threshold(roi_gray, tval, 255, cv2.THRESH_BINARY_INV)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
@@ -1545,7 +1563,16 @@ def _find_marker_in_roi(roi_gray):
     best_center = None
     best_score = 0
 
-    for tval in [50, 70, 90, 110, 130]:
+    # [IMPROVE] Mở rộng threshold range + thêm Otsu cho ảnh phone washed-out.
+    # Marker đen trong ảnh sáng/vàng vọt có thể có pixel value 100-160 (không
+    # còn đen ~50). Dải 30-150 + Otsu để bắt mọi tình huống.
+    threshold_values = [30, 50, 70, 90, 110, 130, 150]
+    otsu_val, _ = cv2.threshold(roi_gray, 0, 255,
+                                cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    if 30 <= otsu_val <= 200:
+        threshold_values.append(int(otsu_val))
+
+    for tval in threshold_values:
         _, binary = cv2.threshold(roi_gray, tval, 255, cv2.THRESH_BINARY_INV)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
