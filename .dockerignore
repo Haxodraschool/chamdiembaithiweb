@@ -63,6 +63,15 @@ docs
 *.md
 !README.md
 
+# ── SSL / Certbot (host-only, không vào image) ───────────────────────────────
+certbot
+nginx.conf
+docker-compose.yml
+
+# ── Backups ──────────────────────────────────────────────────────────────────
+backup_*.sql
+*.bak
+
 # ── Misc ─────────────────────────────────────────────────────────────────────
 1234567
 .dockerignore
