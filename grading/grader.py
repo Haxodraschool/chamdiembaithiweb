@@ -296,12 +296,14 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
     # Parse đáp án
     correct = parse_answer_key(answer_key_str)
 
-    # Chấm — redirect stdout/stderr to avoid Windows cp1252 encoding crash
-    # (engine prints Vietnamese text which Windows console can't handle)
+    # Chấm — capture stdout for debug log
     old_stdout, old_stderr = sys.stdout, sys.stderr
+    captured_out = io.BytesIO()
+    captured_err = io.BytesIO()
+    debug_log = ''
     try:
-        sys.stdout = io.TextIOWrapper(io.BytesIO(), encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(io.BytesIO(), encoding='utf-8', errors='replace')
+        sys.stdout = io.TextIOWrapper(captured_out, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(captured_err, encoding='utf-8', errors='replace')
 
         result = engine.process_sheet(
             str(image_path),
@@ -317,6 +319,12 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
             'processing_time': round(time.time() - start_time, 2),
         }
     finally:
+        # Flush and capture debug output
+        try:
+            sys.stdout.flush()
+            debug_log = captured_out.getvalue().decode('utf-8', errors='replace')
+        except Exception:
+            pass
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
@@ -368,5 +376,11 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
         'name_image_path': result.get('name_image_path', ''),
         'processing_time': processing_time,
         'detect_method': detect_method,
+        'scan_quality': result.get('scan_quality', 'OK'),
+        'avg_confidence': result.get('avg_confidence', 0),
+        'preprocess_mode': result.get('preprocess_mode', ''),
+        'offsets': result.get('offsets', {}),
+        'validation_warnings': result.get('validation_warnings', []),
+        'debug_log': debug_log,
         'error': '',
     }

@@ -710,6 +710,11 @@ def grade_api(request):
             'result_image': result_image_b64,
             'overlay_image': overlay_image_b64,
             'name_image': name_image_b64,
+            'debug_log': result.get('debug_log', ''),
+            'avg_confidence': result.get('avg_confidence', 0),
+            'preprocess_mode': result.get('preprocess_mode', ''),
+            'offsets': result.get('offsets', {}),
+            'validation_warnings': result.get('validation_warnings', []),
         })
 
     except Exception as e:

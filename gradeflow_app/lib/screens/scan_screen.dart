@@ -254,6 +254,7 @@ class _ScanScreenState extends State<ScanScreen> {
               result: result,
               imageBytes: _scannedBytes!,
               examTitle: _selectedExam?.title,
+              isAdmin: context.read<AuthService>().isAdmin,
             ),
           ),
         ).then((_) {

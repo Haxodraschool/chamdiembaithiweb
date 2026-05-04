@@ -20,6 +20,13 @@ class GradeResult {
   final String resultImageBase64;
   final String overlayImageBase64;
   final String nameImageBase64;
+  final String debugLog;
+  final double avgConfidence;
+  final String preprocessMode;
+  final Map<String, dynamic> offsets;
+  final String scanQuality;
+  final String qualityWarning;
+  final List<String> validationWarnings;
 
   GradeResult({
     required this.success,
@@ -43,6 +50,13 @@ class GradeResult {
     this.resultImageBase64 = '',
     this.overlayImageBase64 = '',
     this.nameImageBase64 = '',
+    this.debugLog = '',
+    this.avgConfidence = 0,
+    this.preprocessMode = '',
+    this.offsets = const {},
+    this.scanQuality = 'OK',
+    this.qualityWarning = '',
+    this.validationWarnings = const [],
   });
 
   /// Returns `true` when the detection is fully confident — no `?` anywhere in
@@ -163,6 +177,15 @@ class GradeResult {
       resultImageBase64: json['result_image'] ?? '',
       overlayImageBase64: json['overlay_image'] ?? '',
       nameImageBase64: json['name_image'] ?? '',
+      debugLog: json['debug_log'] ?? '',
+      avgConfidence: (json['avg_confidence'] ?? 0).toDouble(),
+      preprocessMode: json['preprocess_mode'] ?? '',
+      offsets: Map<String, dynamic>.from(json['offsets'] ?? {}),
+      scanQuality: json['scan_quality'] ?? 'OK',
+      qualityWarning: json['quality_warning'] ?? '',
+      validationWarnings: (json['validation_warnings'] as List<dynamic>?)
+          ?.map((e) => e.toString())
+          .toList() ?? [],
     );
   }
 }

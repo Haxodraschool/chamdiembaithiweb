@@ -7,26 +7,41 @@ import 'package:flutter/services.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 // ═══════════════════════════════════════════════════════════════════
-//  TNMaker-faithful Live Camera (Landscape)
+//  Azota-style Live Camera with guide frame overlay
 //
-//  Decompiled from MainActivity.java:
-//    onCameraViewStarted → compute p0, q0, s0, squareSide, T0[], U0[]
-//    onCameraFrame → L() threshold corners + K() filter squares
-//    When t0==4 → M() warp + grade → disableView
+//  Key constants (from Azota decompile analysis):
+//    ratioDefault  = 0.69  (paper w/h ≈ A4)
+//    markPercent   = 0.06  (corner bracket arm = 6% of screen width)
+//    framePercent  = 0.88  (guide frame = 88% of screen width)
 //
-//  Visual: gray threshold squares at TNMaker positions + red markers
-//  Auto-capture after 2s stable 4-corner detection
+//  Flow:
+//    1. Show guide frame with 4 gray L-brackets (always visible)
+//    2. Camera streams frames → OpenCV detects dark square markers
+//    3. Detected corners turn GREEN on the overlay
+//    4. All 4 detected + stable 2s → auto-capture
+//    5. User confirms or retries
 // ═══════════════════════════════════════════════════════════════════
 
+// ─── Azota overlay constants ────────────────────────────────────
+const double _kRatioDefault = 0.69;   // paper width/height (≈ A4)
+const double _kFramePercent = 0.88;   // guide frame width as % of screen
+const double _kMarkPercent  = 0.06;   // L-bracket arm length as % of screen width
+const double _kStrokeWidth  = 3.0;    // base stroke width (dp)
+const Color  _kColorGreen   = Color(0xFF00E676); // detected corner
+const Color  _kColorGuide   = Color(0x99FFFFFF);  // undetected guide bracket
+const Color  _kColorDim     = Color(0x88000000);  // dim outside guide frame
+const int    _kStableMs     = 2000;   // stable duration before auto-capture
+const double _kCropPadding  = 0.05;   // 5% extra margin around guide frame when cropping
+
 class CornerMarker {
-  final int quadrant;
+  final int quadrant; // 0=TL 1=TR 2=BL 3=BR
   final Rect rect;
   const CornerMarker(this.quadrant, this.rect);
 }
 
 class _MarkerCandidate {
   final Rect rect;
-  final double score; // Higher = more likely a real marker
+  final double score;
   const _MarkerCandidate(this.rect, this.score);
 }
 
@@ -54,23 +69,12 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
   DateTime _lastFps = DateTime.now();
 
   Size? _imgSize;
-  int _sensorOri = 0;
-
-  // TNMaker layout params (computed from frame dimensions)
-  int _myW = 0;   // p0: paper width
-  int _myH = 0;   // q0: paper height
-  int _startY = 0; // s0: vertical offset
-  int _sqSide = 0; // squareSide = q0/4
-  int _paperW = 0; // i7 = (q0*9)/8
-  int _y34 = 0;    // i6 = (q0*3)/4
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _initCamera();
   }
@@ -102,7 +106,6 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cams.first,
       );
-      _sensorOri = cam.sensorOrientation;
       _ctr = CameraController(cam, ResolutionPreset.veryHigh,
           enableAudio: false, imageFormatGroup: ImageFormatGroup.yuv420);
       await _ctr!.initialize();
@@ -114,27 +117,6 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     } catch (e) {
       if (mounted) setState(() { _error = true; _errorMsg = '$e'; });
     }
-  }
-
-  // ─── TNMaker onCameraViewStarted: compute layout params ────────
-  void _computeLayout(int frameW, int frameH) {
-    // TNMaker: mRatio = width/height
-    final ratio = frameW / frameH;
-    if (ratio >= 16 / 9) {
-      _myH = frameH;
-      _myW = (frameH * 16) ~/ 9;
-    } else {
-      _myW = frameW;
-      _myH = (frameW * 9) ~/ 16;
-    }
-    if (ratio >= 16 / 9) {
-      _startY = 0;
-    } else {
-      _startY = (frameH - _myH) ~/ 2;
-    }
-    _sqSide = _myH ~/ 4;
-    _y34 = (_myH * 3) ~/ 4;
-    _paperW = (_myH * 9) ~/ 8;
   }
 
   // ─── Frame processing ──────────────────────────────────────────
@@ -171,13 +153,9 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       final mat = cv.rotate(sensorMat, cv.ROTATE_90_CLOCKWISE);
       sensorMat.dispose();
 
-      // After rotation: width=sensorH, height=sensorW
       final w = mat.cols;
       final h = mat.rows;
       _imgSize = Size(w.toDouble(), h.toDouble());
-      if (_sqSide == 0) {
-        debugPrint('OMR portrait frame: ${w}x$h (sensor: ${sensorW}x$sensorH)');
-      }
 
       final corners = _detect(mat, w, h);
       mat.dispose();
@@ -189,7 +167,7 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
             _stable++;
             _stableStart ??= DateTime.now();
             final elapsed = DateTime.now().difference(_stableStart!).inMilliseconds;
-            if (elapsed >= 2000) _autoCapture();
+            if (elapsed >= _kStableMs) _autoCapture();
           } else {
             _stable = 0;
             _stableStart = null;
@@ -200,14 +178,49 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     _busy = false;
   }
 
+  // ─── Crop image to guide frame region ──────────────────────
+  Uint8List _cropToGuideFrame(Uint8List jpegBytes) {
+    final img = cv.imdecode(jpegBytes, cv.IMREAD_COLOR);
+
+    final imgW = img.cols.toDouble();
+    final imgH = img.rows.toDouble();
+
+    // Guide frame rect (same math as overlay painter)
+    final frameW = imgW * _kFramePercent;
+    final frameH = frameW / _kRatioDefault;
+    final frameX = (imgW - frameW) / 2;
+    final frameY = (imgH - frameH) / 2;
+
+    // Add padding (5%) to avoid cutting corner markers at the edge
+    final padX = frameW * _kCropPadding;
+    final padY = frameH * _kCropPadding;
+
+    final x1 = (frameX - padX).clamp(0, imgW).toInt();
+    final y1 = (frameY - padY).clamp(0, imgH).toInt();
+    final x2 = (frameX + frameW + padX).clamp(0, imgW).toInt();
+    final y2 = (frameY + frameH + padY).clamp(0, imgH).toInt();
+
+    final roi = img.region(cv.Rect(x1, y1, x2 - x1, y2 - y1));
+    final (success, encoded) = cv.imencode('.jpg', roi);
+    img.dispose();
+
+    if (success) {
+      final result = Uint8List.fromList(encoded);
+      return result;
+    }
+    return jpegBytes; // fallback: return original if encode fails
+  }
+
   Future<void> _autoCapture() async {
     if (_captured) return;
     _captured = true;
+    HapticFeedback.mediumImpact();
     try {
       await _ctr!.stopImageStream();
       final file = await _ctr!.takePicture();
       final bytes = await file.readAsBytes();
-      if (mounted) setState(() => _capturedBytes = bytes);
+      final cropped = _cropToGuideFrame(bytes);
+      if (mounted) setState(() => _capturedBytes = cropped);
     } catch (e) {
       debugPrint('Capture: $e');
       if (mounted) {
@@ -225,15 +238,16 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     try { _ctr!.startImageStream(_processFrame); } catch (_) {}
   }
 
-  /// Manual capture fallback when auto-detect can't find corners
   Future<void> _manualCapture() async {
     if (_captured) return;
     _captured = true;
+    HapticFeedback.lightImpact();
     try {
       await _ctr!.stopImageStream();
       final file = await _ctr!.takePicture();
       final bytes = await file.readAsBytes();
-      if (mounted) setState(() => _capturedBytes = bytes);
+      final cropped = _cropToGuideFrame(bytes);
+      if (mounted) setState(() => _capturedBytes = cropped);
     } catch (e) {
       debugPrint('Manual capture: $e');
       if (mounted) {
@@ -243,27 +257,23 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     }
   }
 
-  // ─── Full-frame corner detection (Azota-style, production-grade) ──
+  // ─── Full-frame corner detection (Azota-style) ─────────────────
   List<CornerMarker> _detect(cv.Mat gray, int w, int h) {
-    // Downsample for speed
     const targetW = 640;
     final scale = targetW / w;
     final targetH = (h * scale).toInt();
     final small = cv.resize(gray, (targetW, targetH));
 
-    // Pre-process: histogram equalization + blur + adaptive threshold
     final enhanced = cv.equalizeHist(small);
     final blurred = cv.gaussianBlur(enhanced, (5, 5), 2.0);
     final thresh = cv.adaptiveThreshold(blurred, 255,
         cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 5.0);
 
-    // Use RETR_TREE for hierarchy info (nested contours = more reliable marker)
     final (contours, hierarchy) = cv.findContours(
         thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
 
-    // Find dark square-ish markers in the full frame
-    final minSide = (targetW * 0.012).toInt();  // ~8px at 640w
-    final maxSide = (targetW * 0.08).toInt();   // ~51px at 640w
+    final minSide = (targetW * 0.012).toInt();
+    final maxSide = (targetW * 0.08).toInt();
     final minArea = minSide * minSide;
     final maxArea = maxSide * maxSide;
 
@@ -276,41 +286,34 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       final rect = cv.boundingRect(cnt);
       if (rect.width < minSide || rect.height < minSide) continue;
 
-      // 1) Squareness: aspect ratio close to 1.0
       final ratio = rect.width > rect.height
           ? rect.width / rect.height : rect.height / rect.width;
       if (ratio > 1.35) continue;
 
-      // 2) Polygon approximation: real markers ≈ 4 vertices (square)
       final peri = cv.arcLength(cnt, true);
       final approx = cv.approxPolyDP(cnt, 0.04 * peri, true);
       final nVertices = approx.length;
       approx.dispose();
-      // Accept 4-8 vertices (slightly rounded squares still have 4-6)
       if (nVertices < 4 || nVertices > 8) continue;
 
-      // 3) Solidity: contour area / bounding rect area (extent)
       final rectArea = rect.width * rect.height;
       final extent = area / rectArea;
-      if (extent < 0.6) continue;  // Square marker should fill >60% of bbox
+      if (extent < 0.6) continue;
 
-      // 4) Fill ratio: pixel density inside bounding rect
       final sub = thresh.region(rect);
       final nz = cv.countNonZero(sub);
       final solidRatio = nz / rectArea;
       sub.dispose();
       if (solidRatio < 0.4) continue;
 
-      // 5) Hierarchy score: marker with child contour (border) = more reliable
       double score = solidRatio + extent * 0.3;
       try {
         if (j < hierarchy.length) {
-          final h = hierarchy[j]; // Vec4i: [next, prev, firstChild, parent]
-          if (h.val3 >= 0) score += 0.2; // val3 = firstChild index
+          final h = hierarchy[j];
+          if (h.val3 >= 0) score += 0.2;
         }
       } catch (_) {}
 
-      // Scale coordinates back to original frame
       candidates.add(_MarkerCandidate(
         Rect.fromLTWH(
           rect.x / scale, rect.y / scale,
@@ -324,20 +327,16 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
 
     if (candidates.length < 4) return [];
 
-    // Classify into quadrants: TL, TR, BL, BR
     final midX = w / 2.0, midY = h / 2.0;
     final tls = candidates.where((c) => c.rect.center.dx < midX && c.rect.center.dy < midY).toList();
     final trs = candidates.where((c) => c.rect.center.dx >= midX && c.rect.center.dy < midY).toList();
     final bls = candidates.where((c) => c.rect.center.dx < midX && c.rect.center.dy >= midY).toList();
     final brs = candidates.where((c) => c.rect.center.dx >= midX && c.rect.center.dy >= midY).toList();
 
-    // Pick best candidate per quadrant: highest score, then closest to corner
-    _MarkerCandidate? _pickCorner(List<_MarkerCandidate> cands, double tx, double ty) {
+    _MarkerCandidate? pickCorner(List<_MarkerCandidate> cands, double tx, double ty) {
       if (cands.isEmpty) return null;
       cands.sort((a, b) {
-        // Primary: higher score wins (hierarchy bonus)
         if ((a.score - b.score).abs() > 0.1) return b.score.compareTo(a.score);
-        // Secondary: closer to corner wins
         final da = (a.rect.center.dx - tx) * (a.rect.center.dx - tx) +
             (a.rect.center.dy - ty) * (a.rect.center.dy - ty);
         final db = (b.rect.center.dx - tx) * (b.rect.center.dx - tx) +
@@ -347,10 +346,10 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       return cands.first;
     }
 
-    final tl = _pickCorner(tls, 0, 0);
-    final tr = _pickCorner(trs, w.toDouble(), 0);
-    final bl = _pickCorner(bls, 0, h.toDouble());
-    final br = _pickCorner(brs, w.toDouble(), h.toDouble());
+    final tl = pickCorner(tls, 0, 0);
+    final tr = pickCorner(trs, w.toDouble(), 0);
+    final bl = pickCorner(bls, 0, h.toDouble());
+    final br = pickCorner(brs, w.toDouble(), h.toDouble());
 
     final out = <CornerMarker>[];
     if (tl != null) out.add(CornerMarker(0, tl.rect));
@@ -359,52 +358,38 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     if (br != null) out.add(CornerMarker(3, br.rect));
 
     // ── 3-corner fallback: infer missing corner via parallelogram ──
-    // If exactly 3 corners detected, compute 4th: missing = p1 + p3 - p2
     if (out.length == 3) {
       final have = {for (final m in out) m.quadrant};
       final missing = [0, 1, 2, 3].firstWhere((q) => !have.contains(q));
-      // Get the 3 detected corners' centers
       final pts = {for (final m in out) m.quadrant: m.rect.center};
       Offset? inferred;
-      // Parallelogram: opposite = a + c - b (diagonal completion)
-      // TL=0, TR=1, BL=2, BR=3
       switch (missing) {
-        case 0: // missing TL = TR + BL - BR
-          inferred = Offset(pts[1]!.dx + pts[2]!.dx - pts[3]!.dx,
-                            pts[1]!.dy + pts[2]!.dy - pts[3]!.dy);
-          break;
-        case 1: // missing TR = TL + BR - BL
-          inferred = Offset(pts[0]!.dx + pts[3]!.dx - pts[2]!.dx,
-                            pts[0]!.dy + pts[3]!.dy - pts[2]!.dy);
-          break;
-        case 2: // missing BL = TL + BR - TR
-          inferred = Offset(pts[0]!.dx + pts[3]!.dx - pts[1]!.dx,
-                            pts[0]!.dy + pts[3]!.dy - pts[1]!.dy);
-          break;
-        case 3: // missing BR = TR + BL - TL
-          inferred = Offset(pts[1]!.dx + pts[2]!.dx - pts[0]!.dx,
-                            pts[1]!.dy + pts[2]!.dy - pts[0]!.dy);
-          break;
+        case 0: inferred = Offset(pts[1]!.dx + pts[2]!.dx - pts[3]!.dx,
+                                  pts[1]!.dy + pts[2]!.dy - pts[3]!.dy); break;
+        case 1: inferred = Offset(pts[0]!.dx + pts[3]!.dx - pts[2]!.dx,
+                                  pts[0]!.dy + pts[3]!.dy - pts[2]!.dy); break;
+        case 2: inferred = Offset(pts[0]!.dx + pts[3]!.dx - pts[1]!.dx,
+                                  pts[0]!.dy + pts[3]!.dy - pts[1]!.dy); break;
+        case 3: inferred = Offset(pts[1]!.dx + pts[2]!.dx - pts[0]!.dx,
+                                  pts[1]!.dy + pts[2]!.dy - pts[0]!.dy); break;
       }
       if (inferred != null &&
           inferred.dx > 0 && inferred.dx < w &&
           inferred.dy > 0 && inferred.dy < h) {
-        // Use average marker size for the inferred corner
         final avgW = out.map((m) => m.rect.width).reduce((a, b) => a + b) / 3;
         final avgH = out.map((m) => m.rect.height).reduce((a, b) => a + b) / 3;
         out.add(CornerMarker(missing, Rect.fromCenter(
           center: inferred, width: avgW, height: avgH,
         )));
-        debugPrint('Inferred corner $missing at ${inferred.dx.toInt()},${inferred.dy.toInt()}');
       }
     }
 
-    // Size consistency check: reject if marker sizes vary too much
+    // Size consistency check
     if (out.length == 4) {
       final areas = out.map((m) => m.rect.width * m.rect.height).toList();
       final avg = areas.reduce((a, b) => a + b) / 4;
       final maxDev = areas.map((a) => (a - avg).abs() / avg).reduce(math.max);
-      if (maxDev > 0.6) return []; // sizes too inconsistent
+      if (maxDev > 0.6) return [];
     }
 
     return out;
@@ -416,93 +401,172 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     if (_error) {
       return Scaffold(backgroundColor: Colors.black,
         body: Center(child: Text(_errorMsg,
-            style: const TextStyle(color: Colors.white70))));
+            style: const TextStyle(color: Colors.white70, fontSize: 16))));
     }
     if (!_ready || _ctr == null || !_ctr!.value.isInitialized) {
-      return const Scaffold(backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator(color: Colors.green)));
+      return Scaffold(backgroundColor: Colors.black,
+        body: Center(child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: _kColorGreen),
+            const SizedBox(height: 16),
+            Text('Khởi tạo camera...',
+              style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14)),
+          ],
+        )));
     }
     if (_captured && _capturedBytes != null) return _buildResult();
+
+    final detectedQuadrants = {for (final m in _markers) m.quadrant};
+    final allDetected = _markers.length == 4;
+    final progress = _stableStart != null
+        ? math.min(1.0, DateTime.now().difference(_stableStart!).inMilliseconds / _kStableMs)
+        : 0.0;
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Camera preview fullscreen
+          // Camera preview
           Center(child: CameraPreview(_ctr!)),
 
-          // Azota-style green corner overlay
-          if (_imgSize != null)
-            CustomPaint(
-              size: Size.infinite,
-              painter: _CornerOverlayPainter(
-                markers: _markers,
-                imageSize: _imgSize!,
-              ),
-            ),
-
-          // Green dot (top-right, like TNMaker)
-          Positioned(
-            top: 10, right: 10,
-            child: Container(
-              width: 12, height: 12,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _markers.length == 4 ? Colors.green : Colors.grey,
-              ),
+          // Azota-style overlay: dim + guide frame + L-brackets
+          CustomPaint(
+            size: Size.infinite,
+            painter: _AzotaOverlayPainter(
+              markers: _markers,
+              imageSize: _imgSize,
+              detectedQuadrants: detectedQuadrants,
             ),
           ),
 
-          // Back button
+          // Top bar
           Positioned(
-            top: 8, left: 8,
-            child: IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white, size: 28),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ),
-
-          // Manual capture button (fallback)
-          Positioned(
-            bottom: 70, left: 0, right: 0,
-            child: Center(
-              child: GestureDetector(
-                onTap: _manualCapture,
-                child: Container(
-                  width: 64, height: 64,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 3),
-                    color: Colors.white24,
-                  ),
-                  child: const Icon(Icons.camera_alt, color: Colors.white, size: 28),
+            top: 0, left: 0, right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back, color: Colors.white, size: 26),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                    const Spacer(),
+                    // Corner count indicator
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: allDetected
+                            ? _kColorGreen.withOpacity(0.25)
+                            : Colors.black45,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: allDetected ? _kColorGreen : Colors.white30,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (int q = 0; q < 4; q++) ...[
+                            if (q > 0) const SizedBox(width: 4),
+                            Container(
+                              width: 8, height: 8,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: detectedQuadrants.contains(q)
+                                    ? _kColorGreen
+                                    : Colors.white30,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
                 ),
               ),
             ),
           ),
 
-          // Status text
+          // Bottom controls
           Positioned(
-            bottom: 20, left: 0, right: 0,
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  _stableStart != null
-                      ? 'Đứng yên... ${math.max(0, (2000 - DateTime.now().difference(_stableStart!).inMilliseconds) / 1000).toStringAsFixed(1)}s'
-                      : _markers.length == 4
-                          ? 'Đã nhận diện phiếu!'
-                          : 'Hướng camera vào phiếu trắc nghiệm (${_markers.length}/4 góc)',
-                  style: TextStyle(
-                    color: _markers.length == 4 ? Colors.greenAccent : Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
+            bottom: 0, left: 0, right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Status text
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                      margin: const EdgeInsets.symmetric(horizontal: 40),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Text(
+                        _stableStart != null
+                            ? 'Giữ yên... ${math.max(0.0, (_kStableMs - DateTime.now().difference(_stableStart!).inMilliseconds) / 1000).toStringAsFixed(1)}s'
+                            : allDetected
+                                ? 'Đã nhận diện phiếu!'
+                                : 'Hướng camera vào phiếu (${_markers.length}/4)',
+                        style: TextStyle(
+                          color: allDetected ? _kColorGreen : Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    // Capture button with progress ring
+                    GestureDetector(
+                      onTap: _manualCapture,
+                      child: SizedBox(
+                        width: 72, height: 72,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Progress ring (auto-capture countdown)
+                            if (progress > 0)
+                              SizedBox(
+                                width: 72, height: 72,
+                                child: CircularProgressIndicator(
+                                  value: progress,
+                                  strokeWidth: 3,
+                                  color: _kColorGreen,
+                                  backgroundColor: Colors.white24,
+                                ),
+                              ),
+                            // Capture button
+                            Container(
+                              width: 60, height: 60,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: allDetected ? _kColorGreen : Colors.white,
+                                  width: 3,
+                                ),
+                                color: allDetected
+                                    ? _kColorGreen.withOpacity(0.15)
+                                    : Colors.white10,
+                              ),
+                              child: Icon(
+                                allDetected ? Icons.check : Icons.camera_alt,
+                                color: allDetected ? _kColorGreen : Colors.white,
+                                size: 26,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -519,11 +583,10 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
         fit: StackFit.expand,
         children: [
           Center(child: Image.memory(_capturedBytes!, fit: BoxFit.contain)),
-          // Bottom action bar
           Positioned(
             bottom: 0, left: 0, right: 0,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.bottomCenter,
@@ -531,34 +594,44 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
                   colors: [Colors.black87, Colors.transparent],
                 ),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  // Retry button
-                  ElevatedButton.icon(
-                    onPressed: _reset,
-                    icon: const Icon(Icons.refresh, size: 20),
-                    label: const Text('Chụp lại'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white24,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 12),
+              child: SafeArea(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _reset,
+                      icon: const Icon(Icons.refresh, size: 20),
+                      label: const Text('Chụp lại'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white24,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
                     ),
-                  ),
-                  // Confirm button
-                  ElevatedButton.icon(
-                    onPressed: () => Navigator.of(context).pop(_capturedBytes),
-                    icon: const Icon(Icons.check, size: 20),
-                    label: const Text('Chấm điểm'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 12),
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.of(context).pop(_capturedBytes),
+                      icon: const Icon(Icons.check, size: 20),
+                      label: const Text('Chấm điểm'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _kColorGreen,
+                        foregroundColor: Colors.black87,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Back button on result
+          Positioned(
+            top: 0, left: 0,
+            child: SafeArea(
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white, size: 26),
+                onPressed: _reset,
               ),
             ),
           ),
@@ -569,53 +642,142 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Azota-style corner overlay painter
-//  Draws green L-shaped brackets at detected corner marker positions
+//  Azota-style overlay painter
+//
+//  Always draws:
+//    1. Dimmed region outside the guide frame
+//    2. 4 L-shaped brackets at guide frame corners (gray when idle)
+//  When corners detected:
+//    3. Green L-brackets at detected marker positions
+//    4. Guide bracket turns green for that quadrant
 // ═══════════════════════════════════════════════════════════════════
 
-class _CornerOverlayPainter extends CustomPainter {
+class _AzotaOverlayPainter extends CustomPainter {
   final List<CornerMarker> markers;
-  final Size imageSize;
+  final Size? imageSize;
+  final Set<int> detectedQuadrants;
 
-  _CornerOverlayPainter({required this.markers, required this.imageSize});
+  _AzotaOverlayPainter({
+    required this.markers,
+    required this.imageSize,
+    required this.detectedQuadrants,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final sx = size.width / imageSize.width;
-    final sy = size.height / imageSize.height;
+    final screenW = size.width;
+    final screenH = size.height;
 
-    final paint = Paint()
-      ..color = Colors.greenAccent
+    // ── Guide frame (Azota layout) ──
+    final frameW = screenW * _kFramePercent;
+    final frameH = frameW / _kRatioDefault;
+    final frameX = (screenW - frameW) / 2;
+    final frameY = (screenH - frameH) / 2;
+    final guideRect = Rect.fromLTWH(frameX, frameY, frameW, frameH);
+
+    // 1. Dim area outside guide frame
+    final dimPaint = Paint()..color = _kColorDim;
+    // Top
+    canvas.drawRect(Rect.fromLTWH(0, 0, screenW, frameY), dimPaint);
+    // Bottom
+    canvas.drawRect(Rect.fromLTWH(0, frameY + frameH, screenW, screenH - frameY - frameH), dimPaint);
+    // Left
+    canvas.drawRect(Rect.fromLTWH(0, frameY, frameX, frameH), dimPaint);
+    // Right
+    canvas.drawRect(Rect.fromLTWH(frameX + frameW, frameY, screenW - frameX - frameW, frameH), dimPaint);
+
+    // 2. Guide frame border (subtle)
+    final borderPaint = Paint()
+      ..color = Colors.white.withOpacity(0.15)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0
+      ..strokeWidth = 1.0;
+    canvas.drawRect(guideRect, borderPaint);
+
+    // 3. L-brackets at guide frame corners
+    final armLen = screenW * _kMarkPercent;
+    _drawGuideBrackets(canvas, guideRect, armLen);
+
+    // 4. Green L-brackets at detected marker positions
+    if (imageSize != null && markers.isNotEmpty) {
+      final sx = screenW / imageSize!.width;
+      final sy = screenH / imageSize!.height;
+      _drawDetectedBrackets(canvas, sx, sy, armLen);
+    }
+  }
+
+  void _drawGuideBrackets(Canvas canvas, Rect frame, double armLen) {
+    // Draw L-bracket at each guide frame corner
+    // Color: green if that quadrant is detected, gray otherwise
+    final corners = [
+      (0, frame.topLeft),     // TL
+      (1, frame.topRight),    // TR
+      (2, frame.bottomLeft),  // BL
+      (3, frame.bottomRight), // BR
+    ];
+
+    for (final (q, pt) in corners) {
+      final detected = detectedQuadrants.contains(q);
+      final paint = Paint()
+        ..color = detected ? _kColorGreen : _kColorGuide
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = detected ? _kStrokeWidth + 1 : _kStrokeWidth
+        ..strokeCap = StrokeCap.round;
+
+      switch (q) {
+        case 0: // TL: ╔
+          canvas.drawLine(pt, Offset(pt.dx + armLen, pt.dy), paint);
+          canvas.drawLine(pt, Offset(pt.dx, pt.dy + armLen), paint);
+          break;
+        case 1: // TR: ╗
+          canvas.drawLine(pt, Offset(pt.dx - armLen, pt.dy), paint);
+          canvas.drawLine(pt, Offset(pt.dx, pt.dy + armLen), paint);
+          break;
+        case 2: // BL: ╚
+          canvas.drawLine(pt, Offset(pt.dx + armLen, pt.dy), paint);
+          canvas.drawLine(pt, Offset(pt.dx, pt.dy - armLen), paint);
+          break;
+        case 3: // BR: ╝
+          canvas.drawLine(pt, Offset(pt.dx - armLen, pt.dy), paint);
+          canvas.drawLine(pt, Offset(pt.dx, pt.dy - armLen), paint);
+          break;
+      }
+    }
+  }
+
+  void _drawDetectedBrackets(Canvas canvas, double sx, double sy, double armLen) {
+    final paint = Paint()
+      ..color = _kColorGreen
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = _kStrokeWidth
       ..strokeCap = StrokeCap.round;
 
     for (final m in markers) {
-      // Expand rect for visibility (like Azota's green brackets)
+      // Scale marker rect from image coords to screen coords, expand for visibility
       final r = Rect.fromLTWH(
-        m.rect.left * sx - 8,
-        m.rect.top * sy - 8,
-        m.rect.width * sx + 16,
-        m.rect.height * sy + 16,
+        m.rect.left * sx - 6,
+        m.rect.top * sy - 6,
+        m.rect.width * sx + 12,
+        m.rect.height * sy + 12,
       );
-      final armLen = math.min(r.width, r.height) * 0.6;
+      final arm = math.min(r.width, r.height) * 0.55;
 
-      // Draw L-shaped corner brackets (4 corners of the rect)
-      // Top-left
-      canvas.drawLine(Offset(r.left, r.top + armLen), Offset(r.left, r.top), paint);
-      canvas.drawLine(Offset(r.left, r.top), Offset(r.left + armLen, r.top), paint);
-      // Top-right
-      canvas.drawLine(Offset(r.right - armLen, r.top), Offset(r.right, r.top), paint);
-      canvas.drawLine(Offset(r.right, r.top), Offset(r.right, r.top + armLen), paint);
-      // Bottom-left
-      canvas.drawLine(Offset(r.left, r.bottom - armLen), Offset(r.left, r.bottom), paint);
-      canvas.drawLine(Offset(r.left, r.bottom), Offset(r.left + armLen, r.bottom), paint);
-      // Bottom-right
-      canvas.drawLine(Offset(r.right - armLen, r.bottom), Offset(r.right, r.bottom), paint);
-      canvas.drawLine(Offset(r.right, r.bottom), Offset(r.right, r.bottom - armLen), paint);
+      // L-bracket at all 4 corners of the detected marker rect
+      // TL
+      canvas.drawLine(Offset(r.left, r.top), Offset(r.left + arm, r.top), paint);
+      canvas.drawLine(Offset(r.left, r.top), Offset(r.left, r.top + arm), paint);
+      // TR
+      canvas.drawLine(Offset(r.right, r.top), Offset(r.right - arm, r.top), paint);
+      canvas.drawLine(Offset(r.right, r.top), Offset(r.right, r.top + arm), paint);
+      // BL
+      canvas.drawLine(Offset(r.left, r.bottom), Offset(r.left + arm, r.bottom), paint);
+      canvas.drawLine(Offset(r.left, r.bottom), Offset(r.left, r.bottom - arm), paint);
+      // BR
+      canvas.drawLine(Offset(r.right, r.bottom), Offset(r.right - arm, r.bottom), paint);
+      canvas.drawLine(Offset(r.right, r.bottom), Offset(r.right, r.bottom - arm), paint);
     }
   }
 
   @override
-  bool shouldRepaint(_CornerOverlayPainter old) => markers != old.markers;
+  bool shouldRepaint(_AzotaOverlayPainter old) =>
+      markers != old.markers || detectedQuadrants != old.detectedQuadrants;
 }

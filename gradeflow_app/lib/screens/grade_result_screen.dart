@@ -1,23 +1,38 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../config/theme.dart';
 import '../models/grade_result.dart';
 
-class GradeResultScreen extends StatelessWidget {
+class GradeResultScreen extends StatefulWidget {
   final GradeResult result;
   final Uint8List imageBytes;
   final String? examTitle;
+  final bool isAdmin;
 
   const GradeResultScreen({
     super.key,
     required this.result,
     required this.imageBytes,
     this.examTitle,
+    this.isAdmin = false,
   });
+
+  @override
+  State<GradeResultScreen> createState() => _GradeResultScreenState();
+}
+
+class _GradeResultScreenState extends State<GradeResultScreen> {
+  bool _debugExpanded = false;
+
+  GradeResult get result => widget.result;
+  Uint8List get imageBytes => widget.imageBytes;
+  String? get examTitle => widget.examTitle;
+  bool get isAdmin => widget.isAdmin;
 
   @override
   Widget build(BuildContext context) {
@@ -175,6 +190,10 @@ class GradeResultScreen extends StatelessWidget {
         // ── Part III: Trả lời ngắn ──
         if (result.part3.isNotEmpty)
           _buildPart3Answers(),
+        const SizedBox(height: 12),
+
+        // ── Debug Diagnostics (collapsible, admin only) ──
+        if (isAdmin) _buildDebugPanel(),
         const SizedBox(height: 20),
 
         // ── Actions ──
@@ -791,6 +810,162 @@ class GradeResultScreen extends StatelessWidget {
             }),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildDebugPanel() {
+    final summary = StringBuffer();
+    summary.writeln('=== Scan Diagnostics ===');
+    summary.writeln('Method: ${result.detectMethod}');
+    summary.writeln('Preprocess: ${result.preprocessMode}');
+    summary.writeln('Avg Confidence: ${result.avgConfidence.toStringAsFixed(3)}');
+    summary.writeln('Quality: ${result.scanQuality}');
+    summary.writeln('Time: ${result.processingTime}s');
+    if (result.offsets.isNotEmpty) {
+      summary.writeln('Offsets: ${result.offsets}');
+    }
+    if (result.qualityWarning.isNotEmpty) {
+      summary.writeln('Warning: ${result.qualityWarning}');
+    }
+    for (final w in result.validationWarnings) {
+      summary.writeln('  ! $w');
+    }
+    if (result.debugLog.isNotEmpty) {
+      summary.writeln('\n--- Engine Log ---');
+      summary.writeln(result.debugLog);
+    }
+    final fullText = summary.toString();
+
+    return Card(
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => setState(() => _debugExpanded = !_debugExpanded),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Icon(LucideIcons.bug, size: 16, color: GradeFlowTheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Thông số chẩn đoán',
+                        style: GoogleFonts.dmSans(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                  // Quick stats
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: result.scanQuality == 'OK'
+                          ? const Color(0xFFE8F5E9)
+                          : const Color(0xFFFFF3E0),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '${result.detectMethod} | conf=${result.avgConfidence.toStringAsFixed(2)}',
+                      style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    _debugExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                    size: 16,
+                    color: GradeFlowTheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_debugExpanded) ...[
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _debugRow('Method', result.detectMethod),
+                  _debugRow('Preprocess', result.preprocessMode),
+                  _debugRow('Avg Confidence', result.avgConfidence.toStringAsFixed(3)),
+                  _debugRow('Scan Quality', result.scanQuality),
+                  _debugRow('Time', '${result.processingTime}s'),
+                  if (result.offsets.isNotEmpty)
+                    _debugRow('Offsets', result.offsets.entries.map((e) => '${e.key}=${e.value}').join(', ')),
+                  if (result.qualityWarning.isNotEmpty)
+                    _debugRow('Warning', result.qualityWarning),
+                  for (final w in result.validationWarnings)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text('⚠ $w',
+                          style: GoogleFonts.dmSans(fontSize: 11, color: const Color(0xFFE65100))),
+                    ),
+                  const SizedBox(height: 8),
+                  if (result.debugLog.isNotEmpty) ...[
+                    Text('Engine Log:',
+                        style: GoogleFonts.dmSans(fontSize: 11, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F5F5),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      constraints: const BoxConstraints(maxHeight: 200),
+                      child: SingleChildScrollView(
+                        child: Text(result.debugLog,
+                            style: GoogleFonts.dmSans(fontSize: 10, height: 1.4)),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: fullText));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Đã copy thông số chẩn đoán'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                      icon: const Icon(LucideIcons.copy, size: 14),
+                      label: const Text('Copy toàn bộ'),
+                      style: OutlinedButton.styleFrom(
+                        textStyle: GoogleFonts.dmSans(fontSize: 12),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _debugRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(label,
+                style: GoogleFonts.dmSans(
+                    fontSize: 11, color: GradeFlowTheme.onSurfaceVariant)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: GoogleFonts.dmSans(fontSize: 11, fontWeight: FontWeight.w600)),
+          ),
+        ],
       ),
     );
   }
