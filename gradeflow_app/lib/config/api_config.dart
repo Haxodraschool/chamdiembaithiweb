@@ -3,7 +3,7 @@ class ApiConfig {
   // Development: use your local IP (not localhost) so the phone can reach it.
   // Example: 'http://192.168.1.100:8000'
   // Production (Render Singapore):
-  static const String baseUrl = 'http://gradefloww.duckdns.org';
+  static const String baseUrl = 'https://gradefloww.duckdns.org';
 
   // API v1 prefix
   static const String apiPrefix = '/api/v1';
