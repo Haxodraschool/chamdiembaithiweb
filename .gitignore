@@ -84,6 +84,9 @@ gradeflow_app/android/.gradle/
 gradeflow_app/android/local.properties
 gradeflow_app/.packages
 
+# Firebase config (contains API keys)
+gradeflow_app/android/app/google-services.json
+
 # Flutter platforms not needed (keep android, ios, web, lib)
 gradeflow_app/linux/
 gradeflow_app/macos/

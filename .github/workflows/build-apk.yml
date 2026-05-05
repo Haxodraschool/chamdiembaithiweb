@@ -1,0 +1,68 @@
+name: Build & Distribute APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gradeflow_app/**'
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: 'Release notes cho bản build'
+        required: false
+        default: 'Dev build'
+
+jobs:
+  build-and-distribute:
+    name: Build APK & Firebase Distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.4'
+          channel: 'stable'
+          cache: true
+
+      - name: Restore google-services.json
+        working-directory: gradeflow_app/android/app
+        run: echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > google-services.json
+
+      - name: Flutter pub get
+        working-directory: gradeflow_app
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: gradeflow_app
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GradeFlow-APK-${{ github.run_number }}
+          path: gradeflow_app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
+      - name: Firebase App Distribution
+        if: ${{ secrets.FIREBASE_APP_ID != '' }}
+        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_APP_ID }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          groups: testers
+          file: gradeflow_app/build/app/outputs/flutter-apk/app-release.apk
+          releaseNotes: |
+            Build #${{ github.run_number }}
+            Commit: ${{ github.sha }}
+            ${{ github.event.inputs.release_notes || github.event.head_commit.message }}
