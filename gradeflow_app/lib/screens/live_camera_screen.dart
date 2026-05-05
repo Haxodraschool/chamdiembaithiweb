@@ -301,7 +301,7 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     thresholds.add(cv.adaptiveThreshold(blurred, 255,
         cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10.0));
     // Simple thresholds at multiple levels
-    for (final tval in [40, 60, 80, 100, 120, 140]) {
+    for (final tval in [40.0, 60.0, 80.0, 100.0, 120.0, 140.0]) {
       thresholds.add(cv.threshold(blurred, tval, 255, cv.THRESH_BINARY_INV).$2);
     }
 
