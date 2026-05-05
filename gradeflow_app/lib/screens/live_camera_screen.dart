@@ -70,6 +70,11 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
 
   Size? _imgSize;
 
+  // [UnT-STYLE] Touch coordinate debug overlay
+  double _touchX = 0, _touchY = 0;
+  double _touchPrs = 0, _touchSize = 0;
+  int _touchPointers = 0;
+
   @override
   void initState() {
     super.initState();
@@ -533,13 +538,53 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
           // Camera preview
           Center(child: CameraPreview(_ctr!)),
 
-          // UnT-style overlay: filled squares at 4 corners
-          CustomPaint(
-            size: Size.infinite,
-            painter: _AzotaOverlayPainter(
-              markers: _markers,
-              imageSize: _imgSize,
-              detectedQuadrants: detectedQuadrants,
+          // UnT-style overlay: filled squares at 4 corners + touch listener
+          Listener(
+            onPointerDown: (e) => setState(() {
+              _touchX = e.position.dx;
+              _touchY = e.position.dy;
+              _touchPrs = e.pressure;
+              _touchSize = e.size;
+              _touchPointers = e.buttons;
+            }),
+            onPointerMove: (e) => setState(() {
+              _touchX = e.position.dx;
+              _touchY = e.position.dy;
+              _touchPrs = e.pressure;
+              _touchSize = e.size;
+            }),
+            child: CustomPaint(
+              size: Size.infinite,
+              painter: _AzotaOverlayPainter(
+                markers: _markers,
+                imageSize: _imgSize,
+                detectedQuadrants: detectedQuadrants,
+              ),
+            ),
+          ),
+
+          // [UnT-STYLE] Touch coordinate debug bar (top)
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: Container(
+              color: Colors.black.withOpacity(0.6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              child: SafeArea(
+                bottom: false,
+                child: Text(
+                  'P: ${_markers.length}/4  '
+                  'X: ${_touchX.toStringAsFixed(1)}  '
+                  'Y: ${_touchY.toStringAsFixed(1)}  '
+                  'Prs: ${_touchPrs.toStringAsFixed(1)}  '
+                  'Size: ${_touchSize.toStringAsFixed(1)}',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ),
             ),
           ),
 
