@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'gradeflow_app/**'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
     inputs:
       release_notes:
@@ -55,7 +56,6 @@ jobs:
           retention-days: 30
 
       - name: Firebase App Distribution
-        if: ${{ secrets.FIREBASE_APP_ID != '' }}
         uses: wzieba/Firebase-Distribution-Github-Action@v1
         with:
           appId: ${{ secrets.FIREBASE_APP_ID }}
