@@ -282,18 +282,53 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     }
   }
 
-  // ─── Full-frame corner detection (Azota-style, robust) ───────
+  // ─── Full-frame corner detection (Azota-style + UnT retry) ───────
   //  Strategy: simple preprocessing + multiple thresholds + wide area range
   //  Key insight: markers are SOLID BLACK SQUARES — the darkest objects
   //  near image corners. Don't over-process.
+  //  [UnT-STYLE] _reDetectPoints: if initial detection fails, retry with
+  //  CLAHE preprocessing and different threshold parameters.
   List<CornerMarker> _detect(cv.Mat gray, int w, int h) {
     const targetW = 640;
     final scale = targetW / w;
     final targetH = (h * scale).toInt();
     final small = cv.resize(gray, (targetW, targetH));
 
-    // ── Simple preprocessing: just blur (keep it simple!) ──
+    // ── Pass 1: Simple preprocessing (fast path — works 80% of time) ──
     final blurred = cv.gaussianBlur(small, (3, 3), 0);
+    var result = _detectPass(blurred, small, scale, targetW, targetH, w, h);
+    if (result.length == 4) {
+      small.dispose(); blurred.dispose();
+      return result;
+    }
+
+    // ── Pass 2: [UnT-STYLE] _reDetectPoints — CLAHE + dilate retry ──
+    // UnT retries with CLAHE (better than equalizeHist) when initial fails
+    final clahe = cv.CLAHE.create(clipLimit: 2.0, tileGridSize: (8, 8));
+    final enhanced = clahe.apply(small);
+    clahe.dispose();
+    final enhBlurred = cv.gaussianBlur(enhanced, (3, 3), 0);
+    result = _detectPass(enhBlurred, enhanced, scale, targetW, targetH, w, h);
+    enhanced.dispose(); enhBlurred.dispose();
+    if (result.length >= 3) {
+      small.dispose(); blurred.dispose();
+      return result;
+    }
+
+    // ── Pass 3: Dilate + stronger blur (for faint pencil markers) ──
+    final kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3));
+    final dilated = cv.dilate(small, kernel);
+    final dilBlurred = cv.gaussianBlur(dilated, (5, 5), 0);
+    result = _detectPass(dilBlurred, dilated, scale, targetW, targetH, w, h);
+    kernel.dispose(); dilated.dispose(); dilBlurred.dispose();
+
+    small.dispose(); blurred.dispose();
+    return result;
+  }
+
+  // ── Single detection pass with given preprocessed image ──
+  List<CornerMarker> _detectPass(cv.Mat blurred, cv.Mat source,
+      double scale, int targetW, int targetH, int w, int h) {
 
     // ── Multi-threshold: try many levels to catch markers in any lighting ──
     final thresholds = <cv.Mat>[];
@@ -377,8 +412,7 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       }
     }
 
-    // Dispose all mats
-    small.dispose(); blurred.dispose();
+    // Dispose threshold mats (small/blurred handled by caller _detect)
     for (final t in thresholds) { t.dispose(); }
 
     if (candidates.length < 4) return [];
@@ -499,7 +533,7 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
           // Camera preview
           Center(child: CameraPreview(_ctr!)),
 
-          // Azota-style overlay: dim + guide frame + L-brackets
+          // UnT-style overlay: filled squares at 4 corners
           CustomPaint(
             size: Size.infinite,
             painter: _AzotaOverlayPainter(
@@ -710,14 +744,13 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Azota-style overlay painter
+//  UnT-style overlay painter
 //
-//  Always draws:
-//    1. Dimmed region outside the guide frame
-//    2. 4 L-shaped brackets at guide frame corners (gray when idle)
-//  When corners detected:
-//    3. Green L-brackets at detected marker positions
-//    4. Guide bracket turns green for that quadrant
+//  Based on UnT Dạy Học decompile analysis:
+//    1. 4 filled squares at camera corners (no dim overlay)
+//    2. Squares turn GREEN when marker detected in that quadrant
+//    3. Squares stay dark/translucent when not detected
+//    4. When detected, also draw green border around detected marker rect
 // ═══════════════════════════════════════════════════════════════════
 
 class _AzotaOverlayPainter extends CustomPainter {
@@ -736,112 +769,57 @@ class _AzotaOverlayPainter extends CustomPainter {
     final screenW = size.width;
     final screenH = size.height;
 
-    // ── Guide frame (Azota layout) ──
-    final frameW = screenW * _kFramePercent;
-    final frameH = frameW / _kRatioDefault;
-    final frameX = (screenW - frameW) / 2;
-    final frameY = (screenH - frameH) / 2;
-    final guideRect = Rect.fromLTWH(frameX, frameY, frameW, frameH);
+    // ── UnT-style: filled squares at 4 corners of camera view ──
+    // Square size scales with screen width (~10% of screen width)
+    final sqSize = screenW * 0.10;
+    final margin = 4.0; // small margin from screen edges
 
-    // 1. Dim area outside guide frame
-    final dimPaint = Paint()..color = _kColorDim;
-    // Top
-    canvas.drawRect(Rect.fromLTWH(0, 0, screenW, frameY), dimPaint);
-    // Bottom
-    canvas.drawRect(Rect.fromLTWH(0, frameY + frameH, screenW, screenH - frameY - frameH), dimPaint);
-    // Left
-    canvas.drawRect(Rect.fromLTWH(0, frameY, frameX, frameH), dimPaint);
-    // Right
-    canvas.drawRect(Rect.fromLTWH(frameX + frameW, frameY, screenW - frameX - frameW, frameH), dimPaint);
+    final corners = [
+      (0, Rect.fromLTWH(margin, margin, sqSize, sqSize)),                                       // TL
+      (1, Rect.fromLTWH(screenW - sqSize - margin, margin, sqSize, sqSize)),                     // TR
+      (2, Rect.fromLTWH(margin, screenH - sqSize - margin, sqSize, sqSize)),                     // BL
+      (3, Rect.fromLTWH(screenW - sqSize - margin, screenH - sqSize - margin, sqSize, sqSize)),  // BR
+    ];
 
-    // 2. Guide frame border (subtle)
-    final borderPaint = Paint()
-      ..color = Colors.white.withOpacity(0.15)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
-    canvas.drawRect(guideRect, borderPaint);
+    for (final (q, rect) in corners) {
+      final detected = detectedQuadrants.contains(q);
 
-    // 3. L-brackets at guide frame corners
-    final armLen = screenW * _kMarkPercent;
-    _drawGuideBrackets(canvas, guideRect, armLen);
+      // Filled square background
+      final fillPaint = Paint()
+        ..color = detected
+            ? _kColorGreen.withOpacity(0.35)
+            : Colors.black.withOpacity(0.25)
+        ..style = PaintingStyle.fill;
+      canvas.drawRect(rect, fillPaint);
 
-    // 4. Green L-brackets at detected marker positions
+      // Square border (thick, green if detected)
+      final borderPaint = Paint()
+        ..color = detected ? _kColorGreen : Colors.white.withOpacity(0.4)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = detected ? 3.5 : 2.0;
+      canvas.drawRect(rect, borderPaint);
+    }
+
+    // ── Draw green highlight around detected marker positions ──
     if (imageSize != null && markers.isNotEmpty) {
       final sx = screenW / imageSize!.width;
       final sy = screenH / imageSize!.height;
-      _drawDetectedBrackets(canvas, sx, sy, armLen);
-    }
-  }
 
-  void _drawGuideBrackets(Canvas canvas, Rect frame, double armLen) {
-    // Draw L-bracket at each guide frame corner
-    // Color: green if that quadrant is detected, gray otherwise
-    final corners = [
-      (0, frame.topLeft),     // TL
-      (1, frame.topRight),    // TR
-      (2, frame.bottomLeft),  // BL
-      (3, frame.bottomRight), // BR
-    ];
-
-    for (final (q, pt) in corners) {
-      final detected = detectedQuadrants.contains(q);
-      final paint = Paint()
-        ..color = detected ? _kColorGreen : _kColorGuide
+      final markerPaint = Paint()
+        ..color = _kColorGreen
         ..style = PaintingStyle.stroke
-        ..strokeWidth = detected ? _kStrokeWidth + 1 : _kStrokeWidth
-        ..strokeCap = StrokeCap.round;
+        ..strokeWidth = 2.5;
 
-      switch (q) {
-        case 0: // TL: ╔
-          canvas.drawLine(pt, Offset(pt.dx + armLen, pt.dy), paint);
-          canvas.drawLine(pt, Offset(pt.dx, pt.dy + armLen), paint);
-          break;
-        case 1: // TR: ╗
-          canvas.drawLine(pt, Offset(pt.dx - armLen, pt.dy), paint);
-          canvas.drawLine(pt, Offset(pt.dx, pt.dy + armLen), paint);
-          break;
-        case 2: // BL: ╚
-          canvas.drawLine(pt, Offset(pt.dx + armLen, pt.dy), paint);
-          canvas.drawLine(pt, Offset(pt.dx, pt.dy - armLen), paint);
-          break;
-        case 3: // BR: ╝
-          canvas.drawLine(pt, Offset(pt.dx - armLen, pt.dy), paint);
-          canvas.drawLine(pt, Offset(pt.dx, pt.dy - armLen), paint);
-          break;
+      for (final m in markers) {
+        // Scale marker rect from image coords to screen coords
+        final r = Rect.fromLTWH(
+          m.rect.left * sx - 4,
+          m.rect.top * sy - 4,
+          m.rect.width * sx + 8,
+          m.rect.height * sy + 8,
+        );
+        canvas.drawRect(r, markerPaint);
       }
-    }
-  }
-
-  void _drawDetectedBrackets(Canvas canvas, double sx, double sy, double armLen) {
-    final paint = Paint()
-      ..color = _kColorGreen
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = _kStrokeWidth
-      ..strokeCap = StrokeCap.round;
-
-    for (final m in markers) {
-      // Scale marker rect from image coords to screen coords, expand for visibility
-      final r = Rect.fromLTWH(
-        m.rect.left * sx - 6,
-        m.rect.top * sy - 6,
-        m.rect.width * sx + 12,
-        m.rect.height * sy + 12,
-      );
-      final arm = math.min(r.width, r.height) * 0.55;
-
-      // L-bracket at all 4 corners of the detected marker rect
-      // TL
-      canvas.drawLine(Offset(r.left, r.top), Offset(r.left + arm, r.top), paint);
-      canvas.drawLine(Offset(r.left, r.top), Offset(r.left, r.top + arm), paint);
-      // TR
-      canvas.drawLine(Offset(r.right, r.top), Offset(r.right - arm, r.top), paint);
-      canvas.drawLine(Offset(r.right, r.top), Offset(r.right, r.top + arm), paint);
-      // BL
-      canvas.drawLine(Offset(r.left, r.bottom), Offset(r.left + arm, r.bottom), paint);
-      canvas.drawLine(Offset(r.left, r.bottom), Offset(r.left, r.bottom - arm), paint);
-      // BR
-      canvas.drawLine(Offset(r.right, r.bottom), Offset(r.right - arm, r.bottom), paint);
-      canvas.drawLine(Offset(r.right, r.bottom), Offset(r.right, r.bottom - arm), paint);
     }
   }
 

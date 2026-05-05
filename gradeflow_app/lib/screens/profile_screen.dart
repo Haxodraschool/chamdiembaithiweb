@@ -7,6 +7,7 @@ import '../config/api_config.dart';
 import '../config/theme.dart';
 import '../services/auth_service.dart';
 import 'settings_screen.dart';
+import 'admin_test_screen.dart';
 import 'admin_training_screen.dart';
 import 'admin_users_screen.dart';
 
@@ -142,13 +143,45 @@ class ProfileScreen extends StatelessWidget {
                 leading: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
+                    color: GradeFlowTheme.tertiary,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(LucideIcons.flaskConical,
+                      color: Colors.white, size: 20),
+                ),
+                title: Text('Test cham diem',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: GradeFlowTheme.primary)),
+                subtitle: Text('Chup/chon anh → cham nhanh khong luu',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 12,
+                        color: GradeFlowTheme.primary.withOpacity(0.8))),
+                trailing: Icon(LucideIcons.chevronRight,
+                    size: 18, color: GradeFlowTheme.primary),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AdminTestScreen(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              color: GradeFlowTheme.primaryFixed,
+              child: ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
                     color: GradeFlowTheme.primary,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Icon(LucideIcons.shieldCheck,
                       color: Colors.white, size: 20),
                 ),
-                title: Text('Quản trị training data',
+                title: Text('Quan tri training data',
                     style: GoogleFonts.dmSans(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,

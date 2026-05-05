@@ -588,15 +588,51 @@ def export_excel(all_results, output_path="results/bang_diem.xlsx"):
 # ╚════════════════════════════════════════════════════════════════════════╝
 
 def order_points(pts):
-    """Sắp xếp 4 điểm theo thứ tự: trên-trái, trên-phải, dưới-phải, dưới-trái."""
+    """
+    [UnT-STYLE] sort4Contour — Sắp xếp 4 điểm: TL, TR, BR, BL.
+    
+    Cải tiến từ UnT Dạy Học: dùng centroid-based sorting chính xác hơn
+    cho trường hợp perspective skew lớn (phone camera nghiêng).
+    
+    Method 1: sum/diff (classic — nhanh, đúng 95% cases)
+    Method 2: centroid-based (UnT — robust cho extreme skew)
+    
+    Validate: nếu method 1 cho kết quả phi lý → dùng method 2.
+    """
+    pts = np.array(pts, dtype="float32")
+    
+    # ── Method 1: Classic sum/diff ──
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]   # top-left: tổng nhỏ nhất
     rect[2] = pts[np.argmax(s)]   # bottom-right: tổng lớn nhất
     diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]  # top-right
-    rect[3] = pts[np.argmax(diff)]  # bottom-left
-    return rect
+    rect[1] = pts[np.argmin(diff)]  # top-right: x-y nhỏ nhất (x lớn, y nhỏ)
+    rect[3] = pts[np.argmax(diff)]  # bottom-left: x-y lớn nhất (x nhỏ, y lớn)
+    
+    # ── Validate: check all 4 points are unique ──
+    unique_check = len(set(map(tuple, rect.tolist())))
+    if unique_check == 4:
+        return rect
+    
+    # ── Method 2: Centroid-based sorting (UnT sort4Contour fallback) ──
+    # Sort by angle from centroid
+    cx = np.mean(pts[:, 0])
+    cy = np.mean(pts[:, 1])
+    angles = np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx)
+    # Sort clockwise starting from top-left (angle ≈ -3π/4)
+    order = np.argsort(angles)
+    sorted_pts = pts[order]
+    # Rearrange: TL (smallest y first, then smallest x), then clockwise
+    # Top points = 2 smallest y; Bottom points = 2 largest y
+    y_sorted = pts[np.argsort(pts[:, 1])]
+    top2 = y_sorted[:2]
+    bot2 = y_sorted[2:]
+    tl = top2[np.argmin(top2[:, 0])]
+    tr = top2[np.argmax(top2[:, 0])]
+    bl = bot2[np.argmin(bot2[:, 0])]
+    br = bot2[np.argmax(bot2[:, 0])]
+    return np.array([tl, tr, br, bl], dtype="float32")
 
 
 # ╔════════════════════════════════════════════════════════════════════════╗
@@ -1563,6 +1599,66 @@ def _find_marker_near_corner(roi_gray, corner_x_in_roi, corner_y_in_roi):
     if best_center is not None:
         return (best_center[0], best_center[1], best_size)
 
+    # ── [UnT-STYLE] _reDetectPoints: Retry with different preprocessing ──
+    # UnT Dạy Học retries corner detection with different params when initial
+    # detection fails. We replicate this with CLAHE+dilate and adaptive threshold.
+    retry_configs = [
+        # (CLAHE clipLimit, dilate iterations, adaptive blockSize, adaptive C)
+        (3.0, 1, 25, 8),
+        (4.0, 2, 35, 6),
+        (2.0, 0, 21, 12),
+    ]
+    for clip_limit, dilate_iters, block_sz, adapt_c in retry_configs:
+        # CLAHE preprocessing (UnT uses CLAHE instead of equalizeHist)
+        clahe_retry = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(4, 4))
+        enhanced_roi = clahe_retry.apply(roi_gray)
+        
+        # Optional dilate to thicken marker edges
+        if dilate_iters > 0:
+            dk = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            enhanced_roi = cv2.dilate(enhanced_roi, dk, iterations=dilate_iters)
+        
+        # Adaptive threshold (different from simple threshold above)
+        if block_sz % 2 == 0:
+            block_sz += 1
+        binary_retry = cv2.adaptiveThreshold(
+            enhanced_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, block_sz, adapt_c)
+        
+        contours_retry, _ = cv2.findContours(
+            binary_retry, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for cnt in contours_retry:
+            area = cv2.contourArea(cnt)
+            if area < 40 or area > 3000:
+                continue
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            asp = bw / float(bh) if bh > 0 else 0
+            if 0.45 < asp < 2.2:
+                fill = area / (bw * bh) if bw * bh > 0 else 0
+                if fill < 0.5:
+                    continue
+                squareness = 1.0 - abs(asp - 1.0) * 0.5
+                mcx = x + bw // 2
+                mcy = y + bh // 2
+                dist = np.sqrt((mcx - corner_x_in_roi)**2 + 
+                               (mcy - corner_y_in_roi)**2)
+                if dist < 25:
+                    proximity = 1.0
+                elif dist <= 50:
+                    proximity = 1.0 - (dist - 25) / 100.0
+                else:
+                    proximity = max(0.2, 0.75 - (dist - 50) / 100.0)
+                
+                score = area * squareness * fill * proximity
+                if score > best_score:
+                    best_score = score
+                    best_center = (mcx, mcy)
+                    best_size = max(bw, bh)
+        
+        if best_center is not None:
+            return (best_center[0], best_center[1], best_size)
+
     # Fallback: Template matching (giữ nguyên)
     for tsize in [16, 20, 24]:
         pad = 5
@@ -1945,6 +2041,34 @@ def preprocess(warped, enhance_camera=None, mode="fast"):
     cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
 
     return gray, thresh, cleaned
+
+
+def _preprocess_for_bubbles(gray_img):
+    """
+    [UnT-STYLE] _preProcessCircle — Preprocessing RIÊNG cho bubble detection.
+    
+    UnT Dạy Học dùng preprocessing khác cho bubble detection vs paper detection:
+    - CLAHE (Contrast Limited Adaptive Histogram Eq.) thay vì equalizeHist
+    - Dilate nhẹ để lấp lỗ nhỏ trong bubble tô bút chì
+    - Morphological close để nối các vùng tô rời rạc
+    
+    Input: gray image (đã warped, 1400×1920)
+    Output: enhanced gray image tối ưu cho bubble fill ratio calculation
+    """
+    # Step 1: CLAHE — tăng contrast cục bộ mà KHÔNG over-amplify noise
+    # (UnT dùng CLAHE clipLimit=2.0, grid=(8,8))
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray_img)
+    
+    # Step 2: Light dilate — thicken pencil marks (bút chì nhạt)
+    # UnT dùng dilate 1 iteration với kernel 3×3
+    dk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    enhanced = cv2.dilate(enhanced, dk, iterations=1)
+    
+    # Step 3: Bilateral filter — smooth noise nhưng giữ edge bubble
+    enhanced = cv2.bilateralFilter(enhanced, 5, 50, 50)
+    
+    return enhanced
 
 
 def detect_section_offsets(gray):

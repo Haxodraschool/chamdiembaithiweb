@@ -45,7 +45,6 @@ grading/engine/results/
 cnn_test_log.txt
 results.txt
 tmp/
-anh/
 
 # Test / debug files
 test_image_debug/
@@ -93,3 +92,50 @@ gradeflow_app/test/
 
 # Agent skills
 agent/
+
+# APK analysis / decompiled files (do not commit to repo)
+final/
+1234567/
+
+# Analysis scripts
+scripts/setup_render_mcp.ps1
+scripts/stop_railway.ps1
+
+# Test/debug images in gradeflow_app
+gradeflow_app/*.jpg
+gradeflow_app/*.png
+
+# OMR engine binary models (large files)
+grading/engine/*.onnx
+grading/engine/*.onnx.data
+grading/engine/*.pth
+
+# Misc plans/reports
+plans/
+test_accuracy_report.json
+
+# Engine scripts (dev only)
+grading/engine/fast_grade.py
+grading/engine/overlay_demo.py
+
+# Built APK files (large)
+*.apk
+
+# Debug/analysis artifacts
+build_log.txt
+debug_test.py
+PROJECT_SUMMARY.md
+*.doc
+
+# Debug calibration/result images in anh/
+anh/*_calibration.jpg
+anh/*_cleaned.jpg
+anh/*_detect.jpg
+anh/*_gray.jpg
+anh/*_name.jpg
+anh/*_overlay.jpg
+anh/*_result.jpg
+anh/*_thresh.jpg
+
+# Roo skills (agent-specific, not for repo)
+.roo/
