@@ -20,7 +20,19 @@ jobs:
           port: 22
           script: |
             cd ~/chamdiembaithiweb
+            
+            # Backup CNN model files before pull (removed from git but needed for Docker)
+            MODEL_DIR=grading/engine
+            mkdir -p /tmp/model_backup
+            cp -f $MODEL_DIR/bubble_cnn.onnx /tmp/model_backup/ 2>/dev/null || true
+            cp -f $MODEL_DIR/bubble_cnn.onnx.data /tmp/model_backup/ 2>/dev/null || true
+            cp -f $MODEL_DIR/bubble_cnn.pth /tmp/model_backup/ 2>/dev/null || true
+            
             git pull origin main
+            
+            # Restore CNN model files after pull
+            cp -f /tmp/model_backup/bubble_cnn.* $MODEL_DIR/ 2>/dev/null || true
+            
             docker compose build
             docker compose up -d
             docker image prune -f
