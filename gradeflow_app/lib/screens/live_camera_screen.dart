@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 
+import 'dev_overlay_calibrator.dart';
+
 // ═══════════════════════════════════════════════════════════════════
 //  Azota-style Live Camera with guide frame overlay
 //
@@ -74,6 +76,10 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
   double _touchX = 0, _touchY = 0;
   double _touchPrs = 0, _touchSize = 0;
   int _touchPointers = 0;
+
+  // Dev mode
+  bool _devMode = false;
+  String _generatedCode = '';
 
   @override
   void initState() {
@@ -287,70 +293,31 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     }
   }
 
-  // ─── Full-frame corner detection (Azota-style + UnT retry) ───────
-  //  Strategy: simple preprocessing + multiple thresholds + wide area range
-  //  Key insight: markers are SOLID BLACK SQUARES — the darkest objects
-  //  near image corners. Don't over-process.
-  //  [UnT-STYLE] _reDetectPoints: if initial detection fails, retry with
-  //  CLAHE preprocessing and different threshold parameters.
+  // ─── Full-frame corner detection (simple & proven) ──────────────
+  //  Single pass: blur + adaptive threshold + simple thresholds
+  //  No CLAHE, no dilate — keep it fast and stable for real-time.
   List<CornerMarker> _detect(cv.Mat gray, int w, int h) {
     const targetW = 640;
     final scale = targetW / w;
     final targetH = (h * scale).toInt();
     final small = cv.resize(gray, (targetW, targetH));
 
-    // ── Pass 1: Simple preprocessing (fast path — works 80% of time) ──
-    final blurred = cv.gaussianBlur(small, (3, 3), 0);
-    var result = _detectPass(blurred, small, scale, targetW, targetH, w, h);
-    if (result.length == 4) {
-      small.dispose(); blurred.dispose();
-      return result;
-    }
+    // Simple blur
+    final blurred = cv.gaussianBlur(small, (5, 5), 1.5);
 
-    // ── Pass 2: [UnT-STYLE] _reDetectPoints — CLAHE + dilate retry ──
-    // UnT retries with CLAHE (better than equalizeHist) when initial fails
-    final clahe = cv.CLAHE.create(2.0, (8, 8));
-    final enhanced = clahe.apply(small);
-    clahe.dispose();
-    final enhBlurred = cv.gaussianBlur(enhanced, (3, 3), 0);
-    result = _detectPass(enhBlurred, enhanced, scale, targetW, targetH, w, h);
-    enhanced.dispose(); enhBlurred.dispose();
-    if (result.length >= 3) {
-      small.dispose(); blurred.dispose();
-      return result;
-    }
-
-    // ── Pass 3: Dilate + stronger blur (for faint pencil markers) ──
-    final kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3));
-    final dilated = cv.dilate(small, kernel);
-    final dilBlurred = cv.gaussianBlur(dilated, (5, 5), 0);
-    result = _detectPass(dilBlurred, dilated, scale, targetW, targetH, w, h);
-    kernel.dispose(); dilated.dispose(); dilBlurred.dispose();
-
-    small.dispose(); blurred.dispose();
-    return result;
-  }
-
-  // ── Single detection pass with given preprocessed image ──
-  List<CornerMarker> _detectPass(cv.Mat blurred, cv.Mat source,
-      double scale, int targetW, int targetH, int w, int h) {
-
-    // ── Multi-threshold: try many levels to catch markers in any lighting ──
+    // ── Thresholds ──
     final thresholds = <cv.Mat>[];
-    // Adaptive threshold (good for uneven lighting)
     thresholds.add(cv.adaptiveThreshold(blurred, 255,
-        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10.0));
-    // Simple thresholds at multiple levels
-    for (final tval in [40.0, 60.0, 80.0, 100.0, 120.0, 140.0]) {
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 10.0));
+    for (final tval in [50.0, 70.0, 90.0, 110.0, 130.0]) {
       thresholds.add(cv.threshold(blurred, tval, 255, cv.THRESH_BINARY_INV).$2);
     }
 
-    // ── Marker size constraints (WIDE — camera at distance = tiny markers) ──
-    // On 640px image: markers can be 6-50px depending on distance
-    final minSide = 6;
-    final maxSide = (targetW * 0.08).toInt();  // ~50px
-    final minArea = minSide * minSide;  // 36px²
-    final maxArea = maxSide * maxSide;  // ~2500px²
+    // ── Size constraints ──
+    final minSide = (targetW * 0.01).toInt();
+    final maxSide = (targetW * 0.07).toInt();
+    final minArea = minSide * minSide;
+    final maxArea = maxSide * maxSide;
 
     final candidates = <_MarkerCandidate>[];
 
@@ -366,21 +333,17 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
         final rect = cv.boundingRect(cnt);
         if (rect.width < minSide || rect.height < minSide) continue;
 
-        // Aspect ratio: markers are roughly square (allow 2:1 for perspective)
         final ratio = rect.width > rect.height
             ? rect.width / rect.height : rect.height / rect.width;
-        if (ratio > 2.0) continue;
+        if (ratio > 1.8) continue;
 
-        // Fill ratio: solid black square
         final rectArea = rect.width * rect.height;
         final extent = area / rectArea;
-        if (extent < 0.4) continue;
+        if (extent < 0.5) continue;
 
-        // ── Scoring ──
-        final squareness = 1.0 - (ratio - 1.0).abs() * 0.3;
-        double score = extent * 0.4 + squareness * 0.2;
+        final squareness = 1.0 - (ratio - 1.0).abs() * 0.4;
+        double score = extent * 0.4 + squareness * 0.3;
 
-        // Proximity to image corner (strong signal for OMR markers)
         final cx = (rect.x + rect.width / 2) / targetW;
         final cy = (rect.y + rect.height / 2) / targetH;
         final dTL = math.sqrt(cx * cx + cy * cy);
@@ -388,12 +351,10 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
         final dBL = math.sqrt(cx * cx + (1 - cy) * (1 - cy));
         final dBR = math.sqrt((1 - cx) * (1 - cx) + (1 - cy) * (1 - cy));
         final minCornerDist = [dTL, dTR, dBL, dBR].reduce(math.min);
-        // Strong bonus for being near a corner (within 30%)
         if (minCornerDist < 0.30) {
-          score += 0.5 * (1.0 - minCornerDist / 0.30);
+          score += 0.4 * (1.0 - minCornerDist / 0.30);
         }
 
-        // Deduplicate
         final scaledRect = Rect.fromLTWH(
           rect.x / scale, rect.y / scale,
           rect.width / scale, rect.height / scale,
@@ -417,12 +378,11 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       }
     }
 
-    // Dispose threshold mats (small/blurred handled by caller _detect)
+    small.dispose(); blurred.dispose();
     for (final t in thresholds) { t.dispose(); }
 
     if (candidates.length < 4) return [];
 
-    // Sort by score descending, take top candidates
     candidates.sort((a, b) => b.score.compareTo(a.score));
     final topCands = candidates.take(20).toList();
 
@@ -432,11 +392,9 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     final bls = topCands.where((c) => c.rect.center.dx < midX && c.rect.center.dy >= midY).toList();
     final brs = topCands.where((c) => c.rect.center.dx >= midX && c.rect.center.dy >= midY).toList();
 
-    // Pick best candidate per quadrant: weighted by score + proximity to corner
     _MarkerCandidate? pickCorner(List<_MarkerCandidate> cands, double tx, double ty) {
       if (cands.isEmpty) return null;
       cands.sort((a, b) {
-        // Combined score: 60% detection score + 40% proximity to expected corner
         final da = math.sqrt(
             (a.rect.center.dx - tx) * (a.rect.center.dx - tx) +
             (a.rect.center.dy - ty) * (a.rect.center.dy - ty));
@@ -462,7 +420,6 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     if (bl != null) out.add(CornerMarker(2, bl.rect));
     if (br != null) out.add(CornerMarker(3, br.rect));
 
-    // ── 3-corner fallback: infer missing corner via parallelogram ──
     if (out.length == 3) {
       final have = {for (final m in out) m.quadrant};
       final missing = [0, 1, 2, 3].firstWhere((q) => !have.contains(q));
@@ -489,14 +446,11 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       }
     }
 
-    // Size consistency check (very relaxed for phone camera at distance)
-    // At distance, perspective makes markers very different sizes
     if (out.length == 4) {
       final areas = out.map((m) => m.rect.width * m.rect.height).toList();
       final avg = areas.reduce((a, b) => a + b) / 4;
       final maxDev = areas.map((a) => (a - avg).abs() / avg).reduce(math.max);
-      // Only reject if wildly inconsistent (>3x difference)
-      if (maxDev > 2.0) return [];
+      if (maxDev > 1.5) return [];
     }
 
     return out;
@@ -601,6 +555,25 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                     const Spacer(),
+                    // Dev mode toggle (long press)
+                    GestureDetector(
+                      onLongPress: () {
+                        setState(() => _devMode = !_devMode);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: _devMode ? Colors.orange.withOpacity(0.8) : Colors.white24,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.settings,
+                          color: _devMode ? Colors.white : Colors.white54,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     // Corner count indicator
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -718,6 +691,50 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
               ),
             ),
           ),
+
+          // Dev mode calibrator overlay
+          if (_devMode)
+            DevOverlayCalibrator(
+              screenSize: MediaQuery.of(context).size,
+              onDone: () {
+                setState(() => _devMode = false);
+              },
+              onCodeGenerated: (code) {
+                setState(() => _generatedCode = code);
+                _showCodeDialog(code);
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showCodeDialog(String code) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Generated Overlay Code'),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            code,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: code));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied to clipboard!')),
+              );
+              Navigator.pop(ctx);
+            },
+            child: const Text('Copy'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
@@ -814,10 +831,11 @@ class _AzotaOverlayPainter extends CustomPainter {
     final screenW = size.width;
     final screenH = size.height;
 
-    // ── UnT-style: filled squares at 4 corners of camera view ──
-    // Square size scales with screen width (~10% of screen width)
-    final sqSize = screenW * 0.10;
-    final margin = 4.0; // small margin from screen edges
+    // ── UnT-style: 4 filled GREEN squares at camera corners ──
+    // From UnT screenshot: squares are ~12% screen width, thick green border
+    // No dim overlay, no guide frame — just 4 corner squares
+    final sqSize = screenW * 0.12;
+    final margin = 4.0;
 
     final corners = [
       (0, Rect.fromLTWH(margin, margin, sqSize, sqSize)),                                       // TL
@@ -829,19 +847,19 @@ class _AzotaOverlayPainter extends CustomPainter {
     for (final (q, rect) in corners) {
       final detected = detectedQuadrants.contains(q);
 
-      // Filled square background
+      // Filled square background — green when detected, dark when not
       final fillPaint = Paint()
         ..color = detected
-            ? _kColorGreen.withOpacity(0.35)
-            : Colors.black.withOpacity(0.25)
+            ? _kColorGreen.withOpacity(0.4)
+            : Colors.black.withOpacity(0.3)
         ..style = PaintingStyle.fill;
       canvas.drawRect(rect, fillPaint);
 
-      // Square border (thick, green if detected)
+      // Square border — thick green always (like UnT screenshot)
       final borderPaint = Paint()
-        ..color = detected ? _kColorGreen : Colors.white.withOpacity(0.4)
+        ..color = _kColorGreen
         ..style = PaintingStyle.stroke
-        ..strokeWidth = detected ? 3.5 : 2.0;
+        ..strokeWidth = 4.0;
       canvas.drawRect(rect, borderPaint);
     }
 
@@ -856,7 +874,6 @@ class _AzotaOverlayPainter extends CustomPainter {
         ..strokeWidth = 2.5;
 
       for (final m in markers) {
-        // Scale marker rect from image coords to screen coords
         final r = Rect.fromLTWH(
           m.rect.left * sx - 4,
           m.rect.top * sy - 4,
