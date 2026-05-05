@@ -282,50 +282,39 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     }
   }
 
-  // ─── Full-frame corner detection (Azota-style, improved) ───────
-  //  Improvements over original:
-  //  1. CLAHE instead of equalizeHist (better for uneven lighting)
-  //  2. Bilateral filter (preserves edges, reduces noise)
-  //  3. Multiple threshold strategies (adaptive + simple thresholds)
-  //  4. Tighter area range (markers are small squares, not large objects)
-  //  5. Better scoring: squareness + fill ratio + proximity to corners
+  // ─── Full-frame corner detection (Azota-style, robust) ───────
+  //  Strategy: simple preprocessing + multiple thresholds + wide area range
+  //  Key insight: markers are SOLID BLACK SQUARES — the darkest objects
+  //  near image corners. Don't over-process.
   List<CornerMarker> _detect(cv.Mat gray, int w, int h) {
     const targetW = 640;
     final scale = targetW / w;
     final targetH = (h * scale).toInt();
     final small = cv.resize(gray, (targetW, targetH));
 
-    // ── Preprocessing: bilateral + equalizeHist (phone-camera friendly) ──
-    // Bilateral filter FIRST: smooth noise while preserving marker edges
-    final bilateral = cv.bilateralFilter(small, 9, 75.0, 75.0);
+    // ── Simple preprocessing: just blur (keep it simple!) ──
+    final blurred = cv.gaussianBlur(small, (3, 3), 0);
 
-    // EqualizeHist: enhance local contrast (after denoising)
-    final enhanced = cv.equalizeHist(bilateral);
+    // ── Multi-threshold: try many levels to catch markers in any lighting ──
+    final thresholds = <cv.Mat>[];
+    // Adaptive threshold (good for uneven lighting)
+    thresholds.add(cv.adaptiveThreshold(blurred, 255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10.0));
+    // Simple thresholds at multiple levels
+    for (final tval in [40, 60, 80, 100, 120, 140]) {
+      thresholds.add(cv.threshold(blurred, tval, 255, cv.THRESH_BINARY_INV).$2);
+    }
 
-    // Gaussian blur for threshold stability
-    final blurred = cv.gaussianBlur(bilateral, (5, 5), 2.0);
-
-    // ── Multi-strategy thresholding ──
-    // Strategy 1: Adaptive threshold (handles uneven lighting)
-    final thresh1 = cv.adaptiveThreshold(blurred, 255,
-        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 21, 8.0);
-
-    // Strategy 2: Simple thresholds at multiple levels
-    // (catches markers that adaptive misses due to local contrast)
-    final thresh2 = cv.threshold(blurred, 60, 255, cv.THRESH_BINARY_INV);
-    final thresh3 = cv.threshold(blurred, 90, 255, cv.THRESH_BINARY_INV);
-
-    // ── Marker size constraints (tighter than before) ──
-    // Corner markers on QM 2025 are ~15-35px on a 640px-wide image
-    final minSide = (targetW * 0.015).toInt();  // ~10px
-    final maxSide = (targetW * 0.055).toInt();  // ~35px (was 51px — too large)
-    final minArea = minSide * minSide;
-    final maxArea = maxSide * maxSide;
+    // ── Marker size constraints (WIDE — camera at distance = tiny markers) ──
+    // On 640px image: markers can be 6-50px depending on distance
+    final minSide = 6;
+    final maxSide = (targetW * 0.08).toInt();  // ~50px
+    final minArea = minSide * minSide;  // 36px²
+    final maxArea = maxSide * maxSide;  // ~2500px²
 
     final candidates = <_MarkerCandidate>[];
 
-    // ── Extract candidates from all threshold images ──
-    for (final thresh in [thresh1, thresh2.$2, thresh3.$2]) {
+    for (final thresh in thresholds) {
       final (contours, _) = cv.findContours(
           thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
@@ -337,49 +326,34 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
         final rect = cv.boundingRect(cnt);
         if (rect.width < minSide || rect.height < minSide) continue;
 
-        // Aspect ratio: markers are nearly square (allow perspective skew)
+        // Aspect ratio: markers are roughly square (allow 2:1 for perspective)
         final ratio = rect.width > rect.height
             ? rect.width / rect.height : rect.height / rect.width;
-        if (ratio > 1.5) continue;
+        if (ratio > 2.0) continue;
 
-        // Polygon approximation: markers are roughly 4-6 sided
-        final peri = cv.arcLength(cnt, true);
-        final approx = cv.approxPolyDP(cnt, 0.05 * peri, true);
-        final nVertices = approx.length;
-        approx.dispose();
-        if (nVertices < 3 || nVertices > 8) continue;
-
-        // Fill ratio: solid black square → extent > 0.6
+        // Fill ratio: solid black square
         final rectArea = rect.width * rect.height;
         final extent = area / rectArea;
-        if (extent < 0.5) continue;
+        if (extent < 0.4) continue;
 
-        // Solidity: pixel fill inside bounding rect
-        final sub = thresh.region(rect);
-        final nz = cv.countNonZero(sub);
-        final solidRatio = nz / rectArea;
-        sub.dispose();
-        if (solidRatio < 0.35) continue;
+        // ── Scoring ──
+        final squareness = 1.0 - (ratio - 1.0).abs() * 0.3;
+        double score = extent * 0.4 + squareness * 0.2;
 
-        // ── Scoring: prefer square, solid, near-corner markers ──
-        final squareness = 1.0 - (ratio - 1.0).abs() * 0.5;
-        double score = solidRatio * 0.5 + extent * 0.3 + squareness * 0.2;
-
-        // Proximity bonus: markers should be near image corners
+        // Proximity to image corner (strong signal for OMR markers)
         final cx = (rect.x + rect.width / 2) / targetW;
         final cy = (rect.y + rect.height / 2) / targetH;
-        // Distance to nearest corner (normalized 0-1)
         final dTL = math.sqrt(cx * cx + cy * cy);
         final dTR = math.sqrt((1 - cx) * (1 - cx) + cy * cy);
         final dBL = math.sqrt(cx * cx + (1 - cy) * (1 - cy));
         final dBR = math.sqrt((1 - cx) * (1 - cx) + (1 - cy) * (1 - cy));
         final minCornerDist = [dTL, dTR, dBL, dBR].reduce(math.min);
-        // Markers within 25% of image size from corner get bonus
-        if (minCornerDist < 0.25) {
-          score += 0.3 * (1.0 - minCornerDist / 0.25);
+        // Strong bonus for being near a corner (within 30%)
+        if (minCornerDist < 0.30) {
+          score += 0.5 * (1.0 - minCornerDist / 0.30);
         }
 
-        // Deduplicate: skip if very close to existing candidate
+        // Deduplicate
         final scaledRect = Rect.fromLTWH(
           rect.x / scale, rect.y / scale,
           rect.width / scale, rect.height / scale,
@@ -388,9 +362,8 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
         for (final existing in candidates) {
           final dx = (existing.rect.center.dx - scaledRect.center.dx).abs();
           final dy = (existing.rect.center.dy - scaledRect.center.dy).abs();
-          if (dx < 30 && dy < 30) {
+          if (dx < 40 && dy < 40) {
             isDuplicate = true;
-            // Keep higher score
             if (score > existing.score) {
               candidates.remove(existing);
               candidates.add(_MarkerCandidate(scaledRect, score));
@@ -405,8 +378,8 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
     }
 
     // Dispose all mats
-    small.dispose(); bilateral.dispose(); enhanced.dispose();
-    blurred.dispose(); thresh1.dispose();
+    small.dispose(); blurred.dispose();
+    for (final t in thresholds) { t.dispose(); }
 
     if (candidates.length < 4) return [];
 
@@ -477,12 +450,14 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
       }
     }
 
-    // Size consistency check (relaxed: 0.8 instead of 0.6 for perspective skew)
+    // Size consistency check (very relaxed for phone camera at distance)
+    // At distance, perspective makes markers very different sizes
     if (out.length == 4) {
       final areas = out.map((m) => m.rect.width * m.rect.height).toList();
       final avg = areas.reduce((a, b) => a + b) / 4;
       final maxDev = areas.map((a) => (a - avg).abs() / avg).reduce(math.max);
-      if (maxDev > 0.8) return [];
+      // Only reject if wildly inconsistent (>3x difference)
+      if (maxDev > 2.0) return [];
     }
 
     return out;
