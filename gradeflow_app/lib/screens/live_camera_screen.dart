@@ -304,7 +304,7 @@ class _LiveCameraScreenState extends State<LiveCameraScreen>
 
     // ── Pass 2: [UnT-STYLE] _reDetectPoints — CLAHE + dilate retry ──
     // UnT retries with CLAHE (better than equalizeHist) when initial fails
-    final clahe = cv.CLAHE.create(clipLimit: 2.0, tileGridSize: (8, 8));
+    final clahe = cv.CLAHE.create(2.0, (8, 8));
     final enhanced = clahe.apply(small);
     clahe.dispose();
     final enhBlurred = cv.gaussianBlur(enhanced, (3, 3), 0);
