@@ -60,7 +60,7 @@ jobs:
         with:
           appId: ${{ secrets.FIREBASE_APP_ID }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          groups: testers
+          testers: ${{ secrets.FIREBASE_TESTER_EMAIL }}
           file: gradeflow_app/build/app/outputs/flutter-apk/app-release.apk
           releaseNotes: |
             Build #${{ github.run_number }}
