@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>So sánh 3 bộ Overlay Positions trên các tỉ lệ camera</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { 
+    font-family: 'Segoe UI', sans-serif; 
+    background: #1a1a2e; 
+    color: #eee; 
+    padding: 24px;
+  }
+  h1 { text-align: center; margin-bottom: 8px; color: #00e676; }
+  .subtitle { text-align: center; color: #888; margin-bottom: 12px; font-size: 14px; }
+  
+  .config-bar {
+    max-width: 1100px;
+    margin: 0 auto 24px;
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .config-item {
+    text-align: center;
+    flex: 1;
+    min-width: 200px;
+  }
+  .config-item .label { font-size: 11px; color: #888; margin-bottom: 4px; }
+  .config-item .val { font-size: 14px; font-weight: 700; }
+  .config-item .val.a { color: #2196f3; }
+  .config-item .val.b { color: #ff9800; }
+  .config-item .val.c { color: #e040fb; }
+
+  .section-title {
+    text-align: center;
+    font-size: 20px;
+    font-weight: 700;
+    margin: 32px 0 16px;
+    color: #64ffda;
+  }
+  .section-title.highlight {
+    background: rgba(255, 152, 0, 0.1);
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 152, 0, 0.3);
+    display: inline-block;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .section-wrap { text-align: center; }
+  
+  .comparison-row {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 32px;
+  }
+  
+  .card {
+    background: #16213e;
+    border-radius: 16px;
+    padding: 14px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    min-width: 180px;
+    flex: 1;
+    max-width: 280px;
+  }
+  .card h3 { margin-bottom: 2px; font-size: 14px; }
+  .card .info { color: #aaa; font-size: 11px; margin-bottom: 10px; }
+  .card.set-a h3 { color: #2196f3; }
+  .card.set-b h3 { color: #ff9800; }
+  .card.set-c h3 { color: #e040fb; }
+  .card.highlight { border: 2px solid #ff9800; }
+  .card.winner { border: 2px solid #00e676; box-shadow: 0 0 20px rgba(0,230,118,0.2); }
+  
+  .phone-frame {
+    position: relative;
+    background: #000;
+    border: 2px solid #333;
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 0 auto;
+  }
+  
+  .camera-preview {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 50%, #1a1a2e 100%);
+    position: absolute;
+    top: 0; left: 0;
+  }
+  
+  .corner-square {
+    position: absolute;
+    border-radius: 2px;
+  }
+  .corner-square.detected {
+    border: 3px solid;
+  }
+  .corner-square.detected.a { background: rgba(33, 150, 243, 0.3); border-color: #2196f3; }
+  .corner-square.detected.b { background: rgba(255, 152, 0, 0.3); border-color: #ff9800; }
+  .corner-square.detected.c { background: rgba(224, 64, 251, 0.3); border-color: #e040fb; }
+  
+  .paper {
+    position: absolute;
+    background: rgba(255,255,255,0.06);
+    border: 1px dashed rgba(255,255,255,0.15);
+    border-radius: 2px;
+  }
+  .paper-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 9px;
+    color: rgba(255,255,255,0.3);
+    white-space: nowrap;
+  }
+  
+  .overflow-warning {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(244, 67, 54, 0.15);
+    border: 2px dashed #f44336;
+    border-radius: 12px;
+    z-index: 10;
+  }
+  .overflow-warning span {
+    color: #f44336;
+    font-size: 11px;
+    font-weight: bold;
+    text-shadow: 0 0 8px rgba(0,0,0,0.8);
+    text-align: center;
+    padding: 8px;
+  }
+  
+  .stats {
+    margin-top: 10px;
+    font-size: 11px;
+    color: #888;
+    line-height: 1.7;
+    text-align: left;
+    background: rgba(0,0,0,0.3);
+    padding: 8px 12px;
+    border-radius: 8px;
+  }
+  .stats .label { color: #aaa; }
+  .stats .value { color: #00e676; font-weight: 600; }
+  .stats .warn { color: #ff9800; font-weight: 600; }
+  .stats .danger { color: #f44336; font-weight: 600; }
+  .stats .ok { color: #00e676; font-weight: 600; }
+  
+  .verdict {
+    max-width: 1100px;
+    margin: 0 auto 24px;
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    overflow-x: auto;
+  }
+  .verdict h3 { color: #64ffda; margin-bottom: 12px; }
+  .verdict table { width: 100%; border-collapse: collapse; }
+  .verdict th, .verdict td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #1a1a2e; font-size: 12px; }
+  .verdict th { color: #aaa; font-size: 11px; }
+  .verdict .col-a { color: #2196f3; }
+  .verdict .col-b { color: #ff9800; }
+  .verdict .col-c { color: #e040fb; }
+  .verdict .best { background: rgba(0, 230, 118, 0.1); }
+  .verdict .winner-cell { font-weight: 700; }
+  
+  .note {
+    max-width: 1100px;
+    margin: 0 auto;
+    background: rgba(255, 152, 0, 0.1);
+    border: 1px solid rgba(255, 152, 0, 0.3);
+    border-radius: 12px;
+    padding: 16px 20px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: #ccc;
+  }
+  .note strong { color: #ff9800; }
+  .note .c { color: #e040fb; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>📐 So sánh 3 bộ Overlay Positions</h1>
+<p class="subtitle">Trên các tỉ lệ khung hình camera khác nhau — Screen calibration: 375×834</p>
+
+<div class="config-bar">
+  <div class="config-item">
+    <div class="label">🔵 BỘ A (code hiện tại)</div>
+    <div class="val a">sqSize=0.2674 | mX=0.0149 | mY=0.1188</div>
+  </div>
+  <div class="config-item">
+    <div class="label">🟠 BỘ B (đề xuất trước)</div>
+    <div class="val b">sqSize=0.2444 | mX=0.0000 | mY=0.1014</div>
+  </div>
+  <div class="config-item">
+    <div class="label">🟣 BỘ C (mới từ bạn)</div>
+    <div class="val c">sqSize=0.2616 | mX=0.0105 | mY=0.0708</div>
+  </div>
+</div>
+
+<div id="content"></div>
+
+<div class="note">
+  <strong>💡 Giải thích:</strong><br>
+  • <strong>sqSize</strong> = kích thước ô vuông góc (% chiều rộng màn hình)<br>
+  • <strong>marginX</strong> = khoảng cách từ mép trái/phải (% chiều rộng)<br>
+  • <strong>marginY</strong> = khoảng cách từ mép trên/dưới (% chiều cao)<br>
+  • Các ô vuông đại diện cho vùng nhận diện marker góc (không phải guide frame giấy A4)<br>
+  • <span class="c">Bộ C</span> có marginY nhỏ nhất (7.08%) → ô vuông gần mép trên/dưới hơn → nhiều không gian giữa cho giấy A4<br>
+  • Giấy A4 overlay sử dụng hằng số: <code>_kRatioDefault=0.69</code>, <code>_kFramePercent=0.88</code>
+</div>
+
+<script>
+const setA = { sqSize: 0.2674, marginX: 0.0149, marginY: 0.1188, name: 'Bộ A', cls: 'set-a', color: 'a' };
+const setB = { sqSize: 0.2444, marginX: 0.0000, marginY: 0.1014, name: 'Bộ B', cls: 'set-b', color: 'b' };
+const setC = { sqSize: 0.2616, marginX: 0.0105, marginY: 0.0708, name: 'Bộ C', cls: 'set-c', color: 'c' };
+
+const allSets = [setA, setB, setC];
+
+const scenarios = [
+  { name: '9:16 (phổ biến)', w: 375, h: 667, desc: 'Android phổ biến' },
+  { name: '9:19.5 (iPhone)', w: 390, h: 844, desc: 'iPhone 14/15/16' },
+  { name: '9:20 (Samsung)', w: 412, h: 915, desc: 'Samsung Galaxy S24' },
+  { name: '3:4 (câu hỏi)', w: 375, h: 500, desc: 'Tỉ lệ camera 3:4', highlight: true },
+  { name: '2:3 (tablet)', w: 600, h: 900, desc: 'Tablet dọc' },
+  { name: '1:1 (vuông)', w: 375, h: 375, desc: 'Trường hợp极端' },
+];
+
+const content = document.getElementById('content');
+
+function calcOverlay(screenW, screenH, config) {
+  const sqSize = screenW * config.sqSize;
+  const marginX = screenW * config.marginX;
+  const marginY = screenH * config.marginY;
+  
+  const corners = [
+    { q: 0, label: 'TL', rect: { x: marginX, y: marginY, w: sqSize, h: sqSize } },
+    { q: 1, label: 'TR', rect: { x: screenW - sqSize - marginX, y: marginY, w: sqSize, h: sqSize } },
+    { q: 2, label: 'BL', rect: { x: marginX, y: screenH - sqSize - marginY, w: sqSize, h: sqSize } },
+    { q: 3, label: 'BR', rect: { x: screenW - sqSize - marginX, y: screenH - sqSize - marginY, w: sqSize, h: sqSize } },
+  ];
+  
+  const overflow = corners.some(c => 
+    c.rect.x < 0 || c.rect.y < 0 || 
+    c.rect.x + c.rect.w > screenW + 1 || 
+    c.rect.y + c.rect.h > screenH + 1
+  );
+  
+  const topBottom = sqSize + marginY;
+  const verticalGap = screenH - 2 * topBottom;
+  const overlap = verticalGap < 0;
+  
+  const leftRight = sqSize + marginX;
+  const horizontalGap = screenW - 2 * leftRight;
+  const hOverlap = horizontalGap < 0;
+  
+  return { corners, sqSize, marginX, marginY, overflow, overlap, verticalGap, horizontalGap, hOverlap };
+}
+
+function renderPhone(phoneW, phoneH, config, scale) {
+  const pw = Math.round(phoneW * scale);
+  const ph = Math.round(phoneH * scale);
+  const r = calcOverlay(phoneW, phoneH, config);
+  
+  let html = `<div class="phone-frame" style="width:${pw}px; height:${ph}px;">`;
+  html += `<div class="camera-preview"></div>`;
+  
+  if (r.overflow) {
+    html += `<div class="overflow-warning"><span>⚠️ TRÀN!</span></div>`;
+  }
+  
+  // Draw corner squares
+  r.corners.forEach(c => {
+    const x = c.rect.x * scale;
+    const y = c.rect.y * scale;
+    const w = c.rect.w * scale;
+    const h = c.rect.h * scale;
+    
+    const cx = Math.max(0, x);
+    const cy = Math.max(0, y);
+    const cw = Math.min(w, pw - cx);
+    const ch = Math.min(h, ph - cy);
+    
+    if (cw > 0 && ch > 0) {
+      html += `<div class="corner-square detected ${config.color}" style="left:${cx}px; top:${cy}px; width:${cw}px; height:${ch}px;"></div>`;
+    }
+  });
+  
+  // Draw paper A4 guide
+  const kRatioDefault = 0.69;
+  const kFramePercent = 0.88;
+  const frameW = phoneW * kFramePercent;
+  const frameH = frameW / kRatioDefault;
+  const frameX = (phoneW - frameW) / 2;
+  const frameY = (phoneH - frameH) / 2;
+  
+  if (frameY >= 0 && frameY + frameH <= phoneH) {
+    html += `<div class="paper" style="left:${frameX*scale}px; top:${frameY*scale}px; width:${frameW*scale}px; height:${frameH*scale}px;">`;
+    html += `<div class="paper-label">A4</div>`;
+    html += `</div>`;
+  }
+  
+  html += `</div>`;
+  return html;
+}
+
+function renderStats(phoneW, phoneH, config) {
+  const r = calcOverlay(phoneW, phoneH, config);
+  
+  const marginStatus = r.overflow ? 'danger' : r.marginY < 15 ? 'warn' : 'ok';
+  const gapStatus = r.verticalGap < 0 ? 'danger' : r.verticalGap < 30 ? 'warn' : 'ok';
+  
+  let html = `<div class="stats">`;
+  html += `<div><span class="label">Ô vuông:</span> <span class="value">${Math.round(r.sqSize)}px</span></div>`;
+  html += `<div><span class="label">mX/mY:</span> <span class="value">${Math.round(r.marginX)}/${Math.round(r.marginY)}px</span></div>`;
+  html += `<div><span class="label">Gap dọc:</span> <span class="${gapStatus}">${Math.round(r.verticalGap)}px</span>${r.overlap ? ' ⚠️' : ''}</div>`;
+  html += `<div><span class="label">Overflow:</span> <span class="${r.overflow ? 'danger' : 'ok'}">${r.overflow ? '❌' : '✅'}</span></div>`;
+  html += `</div>`;
+  return html;
+}
+
+scenarios.forEach(s => {
+  const maxDim = 260;
+  const scale = maxDim / Math.max(s.w, s.h);
+  
+  const section = document.createElement('div');
+  
+  let html = `<div class="section-wrap">`;
+  html += `<div class="section-title${s.highlight ? ' highlight' : ''}">${s.name} — ${s.w}×${s.h}px</div>`;
+  html += `</div>`;
+  
+  html += `<div class="comparison-row">`;
+  
+  // Find winner for this scenario
+  const results = allSets.map(cfg => {
+    const r = calcOverlay(s.w, s.h, cfg);
+    return { config: cfg, result: r, ok: !r.overflow && !r.overlap, gap: r.verticalGap };
+  });
+  
+  const validResults = results.filter(r => r.ok);
+  let winnerCls = null;
+  if (validResults.length > 0) {
+    const best = validResults.reduce((a, b) => a.gap > b.gap ? a : b);
+    winnerCls = best.config.cls;
+  }
+  
+  allSets.forEach(cfg => {
+    const r = calcOverlay(s.w, s.h, cfg);
+    const isWinner = winnerCls === cfg.cls;
+    
+    html += `<div class="card ${cfg.cls}${s.highlight ? ' highlight' : ''}${isWinner ? ' winner' : ''}">`;
+    html += `<h3>${cfg.name}${isWinner ? ' 🏆' : ''}</h3>`;
+    html += `<div class="info">${s.desc}</div>`;
+    html += renderPhone(s.w, s.h, cfg, scale);
+    html += renderStats(s.w, s.h, cfg);
+    html += `</div>`;
+  });
+  
+  html += `</div>`;
+  
+  section.innerHTML = html;
+  content.appendChild(section);
+});
+
+// Summary table
+const summaryDiv = document.createElement('div');
+summaryDiv.className = 'verdict';
+let summaryHtml = `<h3>📊 Bảng tổng hợp</h3>`;
+summaryHtml += `<table>
+  <tr>
+    <th>Tỉ lệ</th>
+    <th>Kích thước</th>
+    <th class="col-a">Bộ A - Status</th>
+    <th class="col-a">A - Gap dọc</th>
+    <th class="col-b">Bộ B - Status</th>
+    <th class="col-b">B - Gap dọc</th>
+    <th class="col-c">Bộ C - Status</th>
+    <th class="col-c">C - Gap dọc</th>
+    <th>🏆 Winner</th>
+  </tr>`;
+
+scenarios.forEach(s => {
+  const rA = calcOverlay(s.w, s.h, setA);
+  const rB = calcOverlay(s.w, s.h, setB);
+  const rC = calcOverlay(s.w, s.h, setC);
+  
+  const aOk = !rA.overflow && !rA.overlap;
+  const bOk = !rB.overflow && !rB.overlap;
+  const cOk = !rC.overflow && !rC.overlap;
+  
+  // Find winner among valid ones (highest gap)
+  const valid = [];
+  if (aOk) valid.push({ name: 'A', gap: rA.verticalGap, color: '#2196f3' });
+  if (bOk) valid.push({ name: 'B', gap: rB.verticalGap, color: '#ff9800' });
+  if (cOk) valid.push({ name: 'C', gap: rC.verticalGap, color: '#e040fb' });
+  
+  let winnerText = '❌ Cả 3';
+  let winnerColor = '#f44336';
+  if (valid.length > 0) {
+    const best = valid.reduce((a, b) => a.gap > b.gap ? a : b);
+    winnerText = `Bộ ${best.name}`;
+    winnerColor = best.color;
+  }
+  
+  summaryHtml += `<tr class="${s.highlight ? 'best' : ''}">
+    <td><strong>${s.name}</strong></td>
+    <td>${s.w}×${s.h}</td>
+    <td class="col-a">${aOk ? '✅ OK' : (rA.overflow ? '❌ TRÀN' : '⚠️ OVERLAP')}</td>
+    <td class="col-a">${Math.round(rA.verticalGap)}px</td>
+    <td class="col-b">${bOk ? '✅ OK' : (rB.overflow ? '❌ TRÀN' : '⚠️ OVERLAP')}</td>
+    <td class="col-b">${Math.round(rB.verticalGap)}px</td>
+    <td class="col-c">${cOk ? '✅ OK' : (rC.overflow ? '❌ TRÀN' : '⚠️ OVERLAP')}</td>
+    <td class="col-c">${Math.round(rC.verticalGap)}px</td>
+    <td class="winner-cell" style="color:${winnerColor}">${winnerText}</td>
+  </tr>`;
+});
+
+summaryHtml += `</table>`;
+summaryDiv.innerHTML = summaryHtml;
+content.appendChild(summaryDiv);
+
+// Final verdict
+const verdictDiv = document.createElement('div');
+verdictDiv.className = 'note';
+verdictDiv.style.marginTop = '24px';
+verdictDiv.innerHTML = `
+  <strong>🎯 Kết luận:</strong><br><br>
+  • <strong>Bộ A</strong> (hiện tại): sqSize lớn nhất (26.74%), marginY lớn nhất (11.88%) → ô vuông to, chiếm nhiều không gian<br>
+  • <strong>Bộ B</strong>: sqSize nhỏ nhất (24.44%), marginX=0 → ô vuông nhỏ, sát mép trái/phải<br>
+  • <span class="c">Bộ C</span> (mới): sqSize trung bình (26.16%), <strong>marginY nhỏ nhất (7.08%)</strong> → ô vuông gần mép trên/dưới nhất<br><br>
+  <span class="c">Bộ C</span> có ưu điểm: marginY thấp nhất (7.08%) nên ô vuông góc nằm gần mép trên/dưới màn hình hơn,<br>
+  tạo khoảng trống dọc lớn nhất cho vùng giấy A4 ở giữa. Trên tỉ lệ 3:4, <span class="c">Bộ C</span> cho gap dọc tốt nhất.<br>
+  Tuy nhiên, ô vuông hơi gần mép có thể bị che bởi notch/camera trước trên một số thiết bị.
+`;
+content.appendChild(verdictDiv);
+
+</script>
+
+</body>
+</html>
