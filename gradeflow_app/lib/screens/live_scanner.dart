@@ -4,18 +4,25 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 
 // ----------------------------------------------------------------------
-// 1. CẤU HÌNH TỌA ĐỘ VÀ TỈ LỆ 3:4
+// 1. CẤU HÌNH TỌA ĐỘ OVERLAY
 // ----------------------------------------------------------------------
-const double sqSizeRatio = 0.12;
+const double sqSizeRatio = 0.1881;
 const Map<String, Offset> cornerRatios = {
-  'TL': Offset(0.0, 0.0),
-  'TR': Offset(0.88, 0.0),
-  'BL': Offset(0.0, 0.88),
-  'BR': Offset(0.88, 0.88),
+  'TL': Offset(0.0000, 0.1901),
+  'TR': Offset(0.8119, 0.1910),
+  'BL': Offset(0.0097, 0.7033),
+  'BR': Offset(0.8119, 0.7054),
 };
+
+late List<CameraDescription> _cameras;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  _cameras = await availableCameras();
+  runApp(const MaterialApp(home: AutoScanScreen()));
+}
 
 class AutoScanScreen extends StatefulWidget {
   const AutoScanScreen({Key? key}) : super(key: key);
@@ -24,14 +31,12 @@ class AutoScanScreen extends StatefulWidget {
   State<AutoScanScreen> createState() => _AutoScanScreenState();
 }
 
-class _AutoScanScreenState extends State<AutoScanScreen>
-    with WidgetsBindingObserver {
+class _AutoScanScreenState extends State<AutoScanScreen> {
   CameraController? _controller;
   bool _isDetecting = false;
   bool _isAligned = false;
   int _alignedFramesCount = 0;
   int _missedFramesCount = 0;
-  String? _errorMessage;
   String? _tiltWarning;
 
   List<Rect> _markerRectsInCorner = [];
@@ -43,50 +48,28 @@ class _AutoScanScreenState extends State<AutoScanScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _initCamera();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (_controller == null || !_controller!.value.isInitialized) return;
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
-      _controller!.stopImageStream();
-    } else if (state == AppLifecycleState.resumed) {
-      _initCamera();
-    }
-  }
-
   Future<void> _initCamera() async {
-    try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        if (mounted) setState(() => _errorMessage = "Không tìm thấy camera!");
-        return;
-      }
+    if (_cameras.isEmpty) return;
 
-      // ★ Nâng resolution lên high cho ảnh chụp chất lượng cao
-      _controller = CameraController(
-        cameras[0],
-        ResolutionPreset.high,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420,
-      );
+    _controller = CameraController(
+      _cameras[0],
+      ResolutionPreset.high,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.yuv420,
+    );
 
-      await _controller!.initialize();
-      if (!mounted) return;
-      setState(() => _errorMessage = null);
+    await _controller!.initialize();
+    if (!mounted) return;
+    setState(() {});
 
-      _controller!.startImageStream((CameraImage image) {
-        if (_isDetecting) return;
-        _isDetecting = true;
-        _processCameraImage(image);
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _errorMessage = "Lỗi Camera: $e");
-    }
+    _controller!.startImageStream((CameraImage image) {
+      if (_isDetecting) return;
+      _isDetecting = true;
+      _processCameraImage(image);
+    });
   }
 
   Future<void> _processCameraImage(CameraImage image) async {
@@ -146,158 +129,103 @@ class _AutoScanScreenState extends State<AutoScanScreen>
         }
       }
     } catch (e) {
-      print("Lỗi phát hiện marker: $e");
+      print("Lỗi phân tích ảnh: $e");
     } finally {
       _isDetecting = false;
     }
   }
 
   Future<void> _autoCapture() async {
+    await _controller!.stopImageStream();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('🎉 Nhận diện thành công! Đang chụp...'),
+        backgroundColor: Colors.green,
+      ),
+    );
+
     try {
-      await _controller!.stopImageStream();
-      if (!mounted) return;
-
       final file = await _controller!.takePicture();
-      print("📸 Đã chụp: ${file.path}");
-
-      final rawBytes = await file.readAsBytes();
-
-      // ★ Crop ảnh theo vùng overlay (chỉ lấy phần giấy thi)
-      final croppedBytes = await compute(_cropImageToOverlay, {
-        'imageBytes': rawBytes,
-        'cropLeft': cornerRatios['TL']!.dx,
-        'cropTop': cornerRatios['TL']!.dy,
-        'cropRight': cornerRatios['BR']!.dx + sqSizeRatio,
-        'cropBottom': cornerRatios['BR']!.dy + sqSizeRatio,
-      });
-
-      if (mounted) {
-        Navigator.pop(context, croppedBytes);
-      }
+      print("Đã chụp: ${file.path}");
     } catch (e) {
       print("Lỗi chụp: $e");
-      if (mounted) {
-        _isAligned = false;
-        _markerRectsInCorner = [];
-        _controller?.startImageStream((image) {
-          if (!_isDetecting) {
-            _isDetecting = true;
-            _processCameraImage(image);
-          }
-        });
-      }
     }
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_errorMessage != null) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child:
-              Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
-        ),
-      );
-    }
     if (_controller == null || !_controller!.value.isInitialized) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final cameraSize = _controller!.value.previewSize!;
+    final size = MediaQuery.of(context).size;
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          AspectRatio(
-            aspectRatio: 3 / 4,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                ClipRect(
-                  child: FittedBox(
-                    fit: BoxFit.cover,
-                    child: SizedBox(
-                      width: cameraSize.height,
-                      height: cameraSize.width,
-                      child: CameraPreview(_controller!),
-                    ),
-                  ),
+          CameraPreview(_controller!),
+
+          CustomPaint(
+            size: size,
+            painter: _AzotaOverlayPainter(
+              screenW: size.width,
+              screenH: size.height,
+              isAligned: _isAligned,
+              markerRectsInCorner: _markerRectsInCorner,
+            ),
+          ),
+
+          // ★ Cảnh báo nghiêng
+          if (_tiltWarning != null)
+            Positioned(
+              top: 80,
+              left: 24,
+              right: 24,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                LayoutBuilder(builder: (context, constraints) {
-                  return CustomPaint(
-                    size: Size(constraints.maxWidth, constraints.maxHeight),
-                    painter: _AzotaOverlayPainter(
-                      screenW: constraints.maxWidth,
-                      screenH: constraints.maxHeight,
-                      isAligned: _isAligned,
-                      markerRectsInCorner: _markerRectsInCorner,
-                    ),
-                  );
-                }),
-
-                // ★ Cảnh báo nghiêng — text nhỏ nhẹ, KHÔNG dùng container lớn
-                if (_tiltWarning != null)
-                  Positioned(
-                    top: 16,
-                    left: 8,
-                    right: 8,
-                    child: Text(
-                      _tiltWarning!,
-                      style: const TextStyle(
-                        color: Colors.orange,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        shadows: [
-                          Shadow(color: Colors.black, blurRadius: 4)
-                        ],
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                child: Text(
+                  _tiltWarning!,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
                   ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
 
-                // ★ Trạng thái align — text nhỏ ở dưới camera preview
-                Positioned(
-                  bottom: 8,
-                  left: 0,
-                  right: 0,
-                  child: Text(
-                    _isAligned
-                        ? "Giữ yên... ($_alignedFramesCount/$_requiredAlignedFrames)"
-                        : "",
-                    style: const TextStyle(
-                      color: Colors.greenAccent,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      shadows: [Shadow(color: Colors.black, blurRadius: 4)],
-                    ),
-                    textAlign: TextAlign.center,
+          Positioned(
+            bottom: 50,
+            left: 0,
+            right: 0,
+            child: Column(
+              children: [
+                Text(
+                  _isAligned
+                      ? "Giữ yên... ($_alignedFramesCount/$_requiredAlignedFrames)"
+                      : "Hãy đưa 4 ô vuông đen vào khung",
+                  style: TextStyle(
+                    color: _isAligned ? Colors.greenAccent : Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    shadows: const [Shadow(color: Colors.black, blurRadius: 4)],
                   ),
                 ),
               ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _isAligned
-                ? "Giữ yên điện thoại..."
-                : "Đưa 4 ô vuông đen vào khung",
-            style: TextStyle(
-              color: _isAligned ? Colors.greenAccent : Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
             ),
           )
         ],
@@ -398,12 +326,14 @@ String? _detectTilt(
 ) {
   if (centers.length < 2) return null;
 
-  double dy = (centers[0].dy - centers[1].dy).abs();
-  double dx = (centers[0].dx - centers[1].dx).abs();
-  if (dx > 0) {
-    double angle = atan(dy / dx) * 180 / pi;
-    if (angle > 8) {
-      return "⚠️ Giấy nghiêng ~${angle.toStringAsFixed(0)}°";
+  if (centers.length >= 2) {
+    double dy = (centers[0].dy - centers[1].dy).abs();
+    double dx = (centers[0].dx - centers[1].dx).abs();
+    if (dx > 0) {
+      double angle = atan(dy / dx) * 180 / pi;
+      if (angle > 8) {
+        return "⚠️ Giấy bị nghiêng ~${angle.toStringAsFixed(0)}° — Hãy đặt giấy thẳng!";
+      }
     }
   }
 
@@ -442,6 +372,7 @@ List<double> _findMarker(
   if (sampleN == 0) return [-1, -1, -1, -1];
   double avgLum = sumLum / sampleN;
 
+  // ★ Threshold: cân bằng
   int darkThresh = (avgLum * 0.50).toInt().clamp(30, 120);
 
   int minX = logicalW, minY = logicalH, maxX = 0, maxY = 0;
@@ -499,80 +430,7 @@ List<double> _findMarker(
 }
 
 // ----------------------------------------------------------------------
-// 4. CROP ẢNH THEO VÙNG OVERLAY
-// ----------------------------------------------------------------------
-
-/// ★ Crop ảnh chụp theo vùng overlay — chỉ lấy phần giấy thi bên trong 4 marker.
-/// Chạy trong isolate để không block UI thread.
-Uint8List _cropImageToOverlay(Map<String, dynamic> params) {
-  final Uint8List imageBytes = params['imageBytes'];
-  final double cropLeft = params['cropLeft'];
-  final double cropTop = params['cropTop'];
-  final double cropRight = params['cropRight'];
-  final double cropBottom = params['cropBottom'];
-
-  // Decode ảnh
-  img.Image? original = img.decodeImage(imageBytes);
-  if (original == null) return imageBytes;
-
-  // ★ Ảnh chụp từ camera thường bị xoay 90° (landscape sensor)
-  // Cần xoay về portrait để khớp với overlay coordinates
-  if (original.width > original.height) {
-    original = img.copyRotate(original, angle: 90);
-  }
-
-  final int imgW = original.width;
-  final int imgH = original.height;
-
-  // ★ Bước 1: Crop 3:4 — giống logic trong _detectMarkers()
-  // Preview stream dùng BoxFit.cover để crop thành 3:4
-  // Ảnh captured cũng cần crop giống hệt
-  final double targetRatio = 3.0 / 4.0;
-  final double currentRatio = imgW / imgH;
-
-  int crop34X = 0, crop34Y = 0;
-  int crop34W = imgW, crop34H = imgH;
-
-  if (currentRatio > targetRatio) {
-    // Ảnh bè ngang hơn 3:4 → crop 2 bên trái phải
-    crop34W = (imgH * targetRatio).toInt();
-    crop34X = (imgW - crop34W) ~/ 2;
-  } else if (currentRatio < targetRatio) {
-    // Ảnh dài hơn 3:4 → crop trên dưới
-    crop34H = (imgW / targetRatio).toInt();
-    crop34Y = (imgH - crop34H) ~/ 2;
-  }
-
-  // ★ Bước 2: Áp dụng overlay coordinates lên crop zone 3:4
-  const double padding = 0.005;
-  int x1 = crop34X + ((cropLeft - padding) * crop34W).toInt().clamp(0, crop34W - 1);
-  int y1 = crop34Y + ((cropTop - padding) * crop34H).toInt().clamp(0, crop34H - 1);
-  int x2 = crop34X + ((cropRight + padding) * crop34W).toInt().clamp(1, crop34W);
-  int y2 = crop34Y + ((cropBottom + padding) * crop34H).toInt().clamp(1, crop34H);
-
-  // Clamp vào biên ảnh
-  x1 = x1.clamp(0, imgW - 1);
-  y1 = y1.clamp(0, imgH - 1);
-  x2 = x2.clamp(1, imgW);
-  y2 = y2.clamp(1, imgH);
-
-  if (x2 <= x1 || y2 <= y1) return imageBytes;
-
-  // Crop ảnh
-  final img.Image cropped = img.copyCrop(
-    original,
-    x: x1,
-    y: y1,
-    width: x2 - x1,
-    height: y2 - y1,
-  );
-
-  final List<int> croppedBytes = img.encodeJpg(cropped, quality: 95);
-  return Uint8List.fromList(croppedBytes);
-}
-
-// ----------------------------------------------------------------------
-// 5. LỚP VẼ UI
+// 4. LỚP VẼ OVERLAY
 // ----------------------------------------------------------------------
 class _AzotaOverlayPainter extends CustomPainter {
   final double screenW;
@@ -597,14 +455,10 @@ class _AzotaOverlayPainter extends CustomPainter {
       ..strokeWidth = 2.0;
 
     final corners = [
-      Rect.fromLTWH(screenW * cornerRatios['TL']!.dx,
-          screenH * cornerRatios['TL']!.dy, sqSize, sqSize),
-      Rect.fromLTWH(screenW * cornerRatios['TR']!.dx,
-          screenH * cornerRatios['TR']!.dy, sqSize, sqSize),
-      Rect.fromLTWH(screenW * cornerRatios['BL']!.dx,
-          screenH * cornerRatios['BL']!.dy, sqSize, sqSize),
-      Rect.fromLTWH(screenW * cornerRatios['BR']!.dx,
-          screenH * cornerRatios['BR']!.dy, sqSize, sqSize),
+      Rect.fromLTWH(screenW * 0.0000, screenH * 0.1901, sqSize, sqSize),
+      Rect.fromLTWH(screenW * 0.8119, screenH * 0.1910, sqSize, sqSize),
+      Rect.fromLTWH(screenW * 0.0097, screenH * 0.7033, sqSize, sqSize),
+      Rect.fromLTWH(screenW * 0.8119, screenH * 0.7054, sqSize, sqSize),
     ];
 
     for (var rect in corners) {
@@ -622,12 +476,11 @@ class _AzotaOverlayPainter extends CustomPainter {
         final corner = corners[i];
         final relMarker = markerRectsInCorner[i];
 
+        // ★ Clamp relative values vào [0, 1]
         double clampedLeft = relMarker.left.clamp(0.0, 1.0);
         double clampedTop = relMarker.top.clamp(0.0, 1.0);
-        double clampedRight =
-            (relMarker.left + relMarker.width).clamp(0.0, 1.0);
-        double clampedBottom =
-            (relMarker.top + relMarker.height).clamp(0.0, 1.0);
+        double clampedRight = (relMarker.left + relMarker.width).clamp(0.0, 1.0);
+        double clampedBottom = (relMarker.top + relMarker.height).clamp(0.0, 1.0);
         double clampedW = clampedRight - clampedLeft;
         double clampedH = clampedBottom - clampedTop;
 
@@ -640,6 +493,7 @@ class _AzotaOverlayPainter extends CustomPainter {
           clampedH * corner.height,
         );
 
+        // ★ Clip canvas to corner bounds (đảm bảo 100% không vẽ ra ngoài)
         canvas.save();
         canvas.clipRect(corner);
         canvas.drawRect(markerScreenRect, markerPaint);
@@ -649,9 +503,10 @@ class _AzotaOverlayPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _AzotaOverlayPainter oldDelegate) =>
-      oldDelegate.isAligned != isAligned ||
-      oldDelegate.screenW != screenW ||
-      oldDelegate.screenH != screenH ||
-      oldDelegate.markerRectsInCorner.length != markerRectsInCorner.length;
+  bool shouldRepaint(covariant _AzotaOverlayPainter oldDelegate) {
+    return oldDelegate.isAligned != isAligned ||
+        oldDelegate.screenW != screenW ||
+        oldDelegate.screenH != screenH ||
+        oldDelegate.markerRectsInCorner.length != markerRectsInCorner.length;
+  }
 }
