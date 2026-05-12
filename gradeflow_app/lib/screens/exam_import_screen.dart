@@ -118,7 +118,7 @@ class _ExamImportScreenState extends State<ExamImportScreen> {
       final bytes = await Navigator.push<Uint8List>(
         context,
         MaterialPageRoute(
-          builder: (_) => const LiveCameraScreen(),
+          builder: (_) => AutoScanScreen(),
         ),
       );
       if (bytes != null && mounted) {

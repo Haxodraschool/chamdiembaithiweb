@@ -158,7 +158,7 @@ class _ScanScreenState extends State<ScanScreen> {
          defaultTargetPlatform == TargetPlatform.iOS)) {
       final bytes = await Navigator.push<Uint8List>(
         context,
-        MaterialPageRoute(builder: (_) => const LiveCameraScreen()),
+        MaterialPageRoute(builder: (_) => AutoScanScreen()),
       );
       if (bytes != null && mounted) {
         final ts = DateTime.now().millisecondsSinceEpoch;

@@ -2904,10 +2904,11 @@ def _auto_align_field_blocks(gray, max_shift=8, stride=1):
     return shifts
 
 
-def extract_part1(cleaned_img, y_offset=0):
+def extract_part1(cleaned_img, y_offset=0, num_questions=None):
     """
-    Đọc 40 câu trắc nghiệm ABCD.
+    Đọc câu trắc nghiệm ABCD.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
+    num_questions: giới hạn số câu quét (None = quét hết theo template).
     2-pass approach:
       Pass 1: Thu thập TẤT CẢ ratios
       Pass 2: Tính global/local thresholds → detect answers
@@ -2940,6 +2941,8 @@ def extract_part1(cleaned_img, y_offset=0):
         col_rows = cfg.get("num_rows", PART1_NUM_ROWS)
         for row in range(col_rows):
             q = q_start + row
+            if num_questions is not None and q > num_questions:
+                break
             cy = sy + row * dy + y_offset
             ratios = {}
 
@@ -2995,10 +2998,11 @@ def extract_part1(cleaned_img, y_offset=0):
 # ║   BƯỚC 5b: TRÍCH XUẤT ĐÁP ÁN PHẦN II (8 câu x a/b/c/d x Đ/S)    ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
-def extract_part2(cleaned_img, y_offset=0):
+def extract_part2(cleaned_img, y_offset=0, num_questions=None):
     """
-    Đọc 8 câu Đúng/Sai cho mỗi ý a, b, c, d.
+    Đọc câu Đúng/Sai cho mỗi ý a, b, c, d.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
+    num_questions: giới hạn số câu quét (None = quét hết theo template).
     Hybrid 1-pass: max(OpenCV, CNN) cho mỗi bubble.
     Trả về:
       answers: {1: {'a': 'Dung', 'b': 'Sai', ...}, ...}
@@ -3009,6 +3013,8 @@ def extract_part2(cleaned_img, y_offset=0):
 
     for blk in PART2_BLOCKS:
         q = blk["q"]
+        if num_questions is not None and q > num_questions:
+            break
         sx, sy = blk["start_x"], blk["start_y"]
         q_ans, q_det = {}, {}
 
@@ -3034,10 +3040,11 @@ def extract_part2(cleaned_img, y_offset=0):
 # ║       BƯỚC 5c: TRÍCH XUẤT ĐÁP ÁN PHẦN III (6 câu điền số)        ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
-def extract_part3(cleaned_img, y_offset=0):
+def extract_part3(cleaned_img, y_offset=0, num_questions=None):
     """
-    Đọc 6 câu điền số: dấu trừ (-), dấu phẩy (.), 4 cột số 0-9.
+    Đọc câu điền số: dấu trừ (-), dấu phẩy (.), 4 cột số 0-9.
     y_offset: bù lệch y do ảnh phồng (từ detect_section_offsets).
+    num_questions: giới hạn số câu quét (None = quét hết theo template).
     Mỗi cột chọn digit có fill_ratio cao nhất (nếu > threshold).
     Trả về:
       answers: {1: '1234', 2: '-5.67', ...}
@@ -3048,6 +3055,8 @@ def extract_part3(cleaned_img, y_offset=0):
 
     for blk in PART3_BLOCKS:
         q = blk["q"]
+        if num_questions is not None and q > num_questions:
+            break
         cols_x = blk["cols_x"]
         q_det = {}
 
@@ -3203,11 +3212,12 @@ def extract_sbd_made(cleaned_img):
 # ║                      CHẤM ĐIỂM (Grading)                            ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
-def grade_part1(student, correct):
+def grade_part1(student, correct, num_questions=None):
     """So sánh Part I. Trả về (score, results_dict)."""
     results = {}
     score = 0
-    for q in range(1, 41):
+    max_q = num_questions if num_questions is not None else 40
+    for q in range(1, max_q + 1):
         s = student.get(q, "")
         c = correct.get(q, "")
         ok = (s == c and s not in ("", "X"))
@@ -3217,11 +3227,12 @@ def grade_part1(student, correct):
     return score, results
 
 
-def grade_part2(student, correct):
+def grade_part2(student, correct, num_questions=None):
     """So sánh Part II. Trả về (score, results_dict). 1 điểm nếu đúng cả 4 ý."""
     results = {}
     score = 0
-    for q in range(1, 9):
+    max_q = num_questions if num_questions is not None else 8
+    for q in range(1, max_q + 1):
         q_res = {}
         n_correct = 0
         for row in PART2_ROWS:
@@ -3237,11 +3248,12 @@ def grade_part2(student, correct):
     return score, results
 
 
-def grade_part3(student, correct):
+def grade_part3(student, correct, num_questions=None):
     """So sánh Part III. Trả về (score, results_dict)."""
     results = {}
     score = 0
-    for q in range(1, 7):
+    max_q = num_questions if num_questions is not None else 6
+    for q in range(1, max_q + 1):
         s = student.get(q, "")
         c = correct.get(q, "")
         ok = (s == c and s != "")
@@ -3508,7 +3520,7 @@ def draw_bubble_grid(warped_image, offsets=None):
 # ║                     PIPELINE CHÍNH (Main)                            ║
 # ╚════════════════════════════════════════════════════════════════════════╝
 
-def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=False, provided_corners=None):
+def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=False, provided_corners=None, parts_config=None):
     """
     Pipeline đầy đủ: phát hiện góc → warp → tiền xử lý → đọc đáp án → chấm điểm.
 
@@ -3521,9 +3533,22 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
       debug           : True → lưu ảnh calibration + threshold
       pre_warped      : True → bỏ qua detect corner (ảnh đã thẳng)
       provided_corners: Tọa độ 4 góc được truyền từ frontend (nếu có)
+      parts_config    : [p1_count, p2_count, p3_count] — giới hạn số câu quét mỗi phần.
+                         None = quét hết theo template (40, 8, 6).
     """
+    # --- Parse parts_config → giới hạn số câu quét mỗi phần ---
+    p1_limit = None
+    p2_limit = None
+    p3_limit = None
+    if parts_config and isinstance(parts_config, (list, tuple)):
+        p1_limit = parts_config[0] if len(parts_config) > 0 and parts_config[0] is not None else None
+        p2_limit = parts_config[1] if len(parts_config) > 1 and parts_config[1] is not None else None
+        p3_limit = parts_config[2] if len(parts_config) > 2 and parts_config[2] is not None else None
+
     print(f"\n{'='*60}")
     print(f"  Xử lý: {os.path.basename(image_path)}")
+    if p1_limit is not None or p2_limit is not None or p3_limit is not None:
+        print(f"  Giới hạn: P1={p1_limit if p1_limit is not None else 'all'} P2={p2_limit if p2_limit is not None else 'all'} P3={p3_limit if p3_limit is not None else 'all'}")
     print(f"{'='*60}")
 
     # --- Load ảnh ---
@@ -3667,7 +3692,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
 
     # --- Bước 4-5: Đọc đáp án (FAST pass) ---
     sbd, made, sbd_det = extract_sbd_made(gray)
-    p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"])
+    p1_ans, p1_det = extract_part1(gray, y_offset=offsets["part1"], num_questions=p1_limit)
 
     # --- Hybrid Decision: try multiple preprocessing, KEEP THE BEST ---
     fast_confs = [_confidence_score(ratios) for ratios in p1_det.values()]
@@ -3699,7 +3724,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
             if r_p3_offset is not None:
                 r_offsets["part3"] = r_p3_offset
             r_sbd, r_made, r_sbd_det = extract_sbd_made(r_gray)
-            r_p1_ans, r_p1_det = extract_part1(r_gray, y_offset=r_offsets["part1"])
+            r_p1_ans, r_p1_det = extract_part1(r_gray, y_offset=r_offsets["part1"], num_questions=p1_limit)
 
             r_confs = [_confidence_score(ratios) for ratios in r_p1_det.values()]
             r_avg_conf = sum(r_confs) / max(1, len(r_confs))
@@ -3738,8 +3763,8 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
     p1_ans, p1_det = best_p1_ans, best_p1_det
     preprocess_mode = best_preprocess_mode
 
-    p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"])
-    p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"])
+    p2_ans, p2_det = extract_part2(gray, y_offset=offsets["part2"], num_questions=p2_limit)
+    p3_ans, p3_det = extract_part3(gray, y_offset=offsets["part3"], num_questions=p3_limit)
 
     # --- Debug output ---
     if debug:
@@ -3750,7 +3775,7 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         print(f"[DEBUG] Đã lưu: _calibration.jpg, _gray.jpg, _thresh.jpg, _cleaned.jpg")
 
     # --- Global Quality Gate ---
-    # Tính confidence cho Part 1 (40 câu) — đủ data để đánh giá
+    # Tính confidence cho Part 1 (số câu thực tế đã quét) — đủ data để đánh giá
     p1_confidences = []
     for q, ratios in p1_det.items():
         p1_confidences.append(_confidence_score(ratios))
@@ -3869,28 +3894,32 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
 
     if correct_answers:
         scores = {}
+        _p1_max = p1_limit if p1_limit is not None else 40
+        _p2_max = p2_limit if p2_limit is not None else 8
+        _p3_max = p3_limit if p3_limit is not None else 6
+
         if "part1" in correct_answers:
-            s, r = grade_part1(p1_ans, correct_answers["part1"])
+            s, r = grade_part1(p1_ans, correct_answers["part1"], num_questions=p1_limit)
             scores["part1"] = s
             draw_results_part1(result_mask, r, y_offset=offsets["part1"])
-            print(f"\n  Phần I  : {s}/40")
+            print(f"\n  Phần I  : {s}/{_p1_max}")
 
         if "part2" in correct_answers:
-            s, r = grade_part2(p2_ans, correct_answers["part2"])
+            s, r = grade_part2(p2_ans, correct_answers["part2"], num_questions=p2_limit)
             scores["part2"] = s
             draw_results_part2(result_mask, r, y_offset=offsets["part2"])
-            print(f"  Phần II : {s}/8")
+            print(f"  Phần II : {s}/{_p2_max}")
 
         if "part3" in correct_answers:
-            s, r = grade_part3(p3_ans, correct_answers["part3"])
+            s, r = grade_part3(p3_ans, correct_answers["part3"], num_questions=p3_limit)
             scores["part3"] = s
             draw_results_part3(result_mask, r, p3_det, y_offset=offsets["part3"])
-            print(f"  Phần III: {s}/6")
+            print(f"  Phần III: {s}/{_p3_max}")
 
         total_score = sum(scores.values())
-        max_score = sum([40 if "part1" in scores else 0,
-                         8 if "part2" in scores else 0,
-                         6 if "part3" in scores else 0])
+        max_score = sum([_p1_max if "part1" in scores else 0,
+                         _p2_max if "part2" in scores else 0,
+                         _p3_max if "part3" in scores else 0])
         print(f"  ─────────────────")
         print(f"  TỔNG ĐIỂM: {total_score}/{max_score}")
 
@@ -3962,30 +3991,38 @@ def process_sheet(image_path, correct_answers=None, debug=False, pre_warped=Fals
         "avg_confidence": round(avg_conf, 3),
         "preprocess_mode": preprocess_mode,
         "validation_warnings": validation_warnings,
+        "parts_config": parts_config,
     }
 
 
 def _print_answers(p1, p2, p3):
     """In đáp án học sinh ra console."""
+    p1_max = max(p1.keys()) if p1 else 0
+    p2_max = max(p2.keys()) if p2 else 0
+    p3_max = max(p3.keys()) if p3 else 0
+
     print("\n  ── Đáp án học sinh ──")
-    print("  Phần I:")
-    for q in range(1, 41):
-        a = p1.get(q, "")
-        flag = " [!]" if a in ("X", "") else ""
-        end = "  " if q % 5 != 0 else "\n"
-        print(f"    Q{q:2d}: {a or '-'}{flag}", end=end)
-    if 40 % 5 != 0:
-        print()
+    if p1_max:
+        print("  Phần I:")
+        for q in range(1, p1_max + 1):
+            a = p1.get(q, "")
+            flag = " [!]" if a in ("X", "") else ""
+            end = "  " if q % 5 != 0 else "\n"
+            print(f"    Q{q:2d}: {a or '-'}{flag}", end=end)
+        if p1_max % 5 != 0:
+            print()
 
-    print("  Phần II:")
-    for q in range(1, 9):
-        qa = p2.get(q, {})
-        parts = [f"{r}={qa.get(r, '-')}" for r in PART2_ROWS]
-        print(f"    Q{q}: {', '.join(parts)}")
+    if p2_max:
+        print("  Phần II:")
+        for q in range(1, p2_max + 1):
+            qa = p2.get(q, {})
+            parts = [f"{r}={qa.get(r, '-')}" for r in PART2_ROWS]
+            print(f"    Q{q}: {', '.join(parts)}")
 
-    print("  Phần III:")
-    for q in range(1, 7):
-        print(f"    Q{q}: {p3.get(q, '-') or '-'}")
+    if p3_max:
+        print("  Phần III:")
+        for q in range(1, p3_max + 1):
+            print(f"    Q{q}: {p3.get(q, '-') or '-'}")
 
 
 # ╔════════════════════════════════════════════════════════════════════════╗

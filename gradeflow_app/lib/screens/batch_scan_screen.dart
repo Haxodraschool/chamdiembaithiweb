@@ -88,7 +88,7 @@ class _BatchScanScreenState extends State<BatchScanScreen> {
         // Open live camera for each paper
         final bytes = await Navigator.push<Uint8List>(
           context,
-          MaterialPageRoute(builder: (_) => const LiveCameraScreen()),
+          MaterialPageRoute(builder: (_) => AutoScanScreen()),
         );
 
         if (bytes == null || !mounted) break; // User cancelled

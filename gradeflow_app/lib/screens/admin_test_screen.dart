@@ -40,7 +40,7 @@ class _AdminTestScreenState extends State<AdminTestScreen> {
             defaultTargetPlatform == TargetPlatform.iOS)) {
       final bytes = await Navigator.push<Uint8List>(
         context,
-        MaterialPageRoute(builder: (_) => const LiveCameraScreen()),
+        MaterialPageRoute(builder: (_) => AutoScanScreen()),
       );
       if (bytes != null && mounted) {
         final ts = DateTime.now().millisecondsSinceEpoch;
@@ -189,7 +189,7 @@ class _AdminTestScreenState extends State<AdminTestScreen> {
                 onPressed: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                      builder: (_) => const LiveCameraScreen()),
+                      builder: (_) => AutoScanScreen()),
                 ),
                 icon: const Icon(LucideIcons.video, size: 22),
                 label: Text('Live Camera (TNMaker)',

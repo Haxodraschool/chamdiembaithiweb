@@ -97,7 +97,7 @@ gradeflow_app/test/
 agent/
 
 # APK analysis / decompiled files (do not commit to repo)
-final/
+
 1234567/
 
 # Analysis scripts

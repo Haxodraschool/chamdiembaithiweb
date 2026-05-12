@@ -256,7 +256,7 @@ def compute_weighted_score(result, scoring_config, correct_answers=None):
     }
 
 
-def grade_image(image_path, answer_key_str='', template_code='', corners=None):
+def grade_image(image_path, answer_key_str='', template_code='', corners=None, parts_config=None):
     """
     Chấm 1 ảnh phiếu thi.
 
@@ -265,6 +265,8 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
         answer_key_str: Đáp án (JSON string hoặc CSV)
         template_code: Mã template phiếu (VD: '30-04-06-TL')
         corners: Tọa độ 4 góc từ client truyền lên (nếu có)
+        parts_config: [p1_count, p2_count, p3_count] — giới hạn số câu quét.
+                      Nếu None, tự lấy từ answer_key_str JSON (key 'parts').
 
     Returns:
         dict {
@@ -296,6 +298,16 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
     # Parse đáp án
     correct = parse_answer_key(answer_key_str)
 
+    # Extract parts_config from answer_key JSON if not provided
+    if parts_config is None and answer_key_str:
+        try:
+            _ak_data = json.loads(answer_key_str)
+            if isinstance(_ak_data, dict) and 'parts' in _ak_data:
+                parts_config = _ak_data['parts']
+                logger.info(f"parts_config from answer_key: {parts_config}")
+        except (json.JSONDecodeError, ValueError):
+            pass
+
     # Chấm — capture stdout for debug log
     old_stdout, old_stderr = sys.stdout, sys.stderr
     captured_out = io.BytesIO()
@@ -310,6 +322,7 @@ def grade_image(image_path, answer_key_str='', template_code='', corners=None):
             correct_answers=correct,
             debug=True,
             provided_corners=corners,
+            parts_config=parts_config,
         )
     except Exception as e:
         logger.error(f"Grading failed: {e}", exc_info=True)
